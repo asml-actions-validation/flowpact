@@ -11,6 +11,7 @@ import {
   type LogRecord,
   type LogSink,
   loadProject,
+  matchesPattern,
   neutralizeWorkflowCommands,
   resolveCommit,
   resolveLogLevel,
@@ -28,6 +29,7 @@ import {
   exitCodeFor,
   type Finding,
   type FlowpactConfig,
+  followsPullRequest,
   githubEvent,
   type ImpactLevel,
   type ImpactRequest,
@@ -325,6 +327,7 @@ function impactRequest(
 ): ImpactRequest {
   const { configPath, baseConfig } = configs;
   return {
+    ...(inputs.paths.length ? { paths: inputs.paths } : {}),
     ...(base ? { base } : {}),
     ...(inputs.expectedImpact ? { expect: inputs.expectedImpact } : {}),
     ...(event ? { event } : {}),
@@ -350,25 +353,54 @@ function prepareInputImpact(
   }
 }
 
+/** The first files of a list, and how many more there are. */
+const listed = (files: string[], max = 10) =>
+  `${files.slice(0, max).join(', ')}${files.length > max ? ` and ${files.length - max} more` : ''}`;
+
 /**
- * Why `impact: auto` stops when nothing is published. Decided on both sides: a pull request that deletes or
- * unpublishes the only published unit is still checked.
+ * Why `impact: auto` stops when nothing published is graded, without paths: nothing is published, or `ignore` leaves
+ * out every published unit (both the baseline's and the pull request's match each). Decided on both sides: a pull
+ * request that deletes, unpublishes or takes out of `ignore` the only published unit is still checked.
  */
 function nothingPublishedNote(
   root: string,
   logger: Logger,
   options: NonNullable<AnalyzeOptions['impact']>,
+  headIgnore: readonly string[],
 ): string | undefined {
-  if (options.publishedFiles?.length !== 0) return undefined;
-  const { policy } = options;
+  const { policy, publishedFiles, ignore } = options;
+  const leftOut = (file: string) =>
+    ignore !== undefined &&
+    [ignore, headIgnore].every((patterns) => patterns.some((p) => matchesPattern(file, p)));
+  if (!publishedFiles?.every(leftOut)) return undefined;
   const project = loadProject({
     root,
     logger,
     ...(policy.publish ? { publish: policy.publish } : {}),
   });
   const units = [...project.workflows.values(), ...project.actions.values()];
-  if (units.some((u) => isPublished(u, policy))) return undefined;
-  return 'impact: no published workflows or actions (see impact.publish)';
+  const published = units.filter((u) => isPublished(u, policy)).map((u) => u.file);
+  if (!published.every(leftOut)) return undefined;
+  const files = [...new Set([...publishedFiles, ...published])].sort();
+  return files.length
+    ? `impact: the baseline's and the pull request's ignore leave out every published workflow and action (${listed(files)}); see ignore`
+    : 'impact: no published workflows or actions (see impact.publish)';
+}
+
+/**
+ * `impact: auto` runs only where something is published that `ignore` does not leave out. Without paths, that is decided
+ * here; with paths, the analysis decides it from the units within them (`onlyIfPublished`), and keeps the baseline that
+ * tells a path the change removed from a mistake.
+ */
+function autoImpact(
+  root: string,
+  logger: Logger,
+  options: NonNullable<AnalyzeOptions['impact']>,
+  head: { config: FlowpactConfig; withPaths: boolean },
+): { options?: NonNullable<AnalyzeOptions['impact']>; note?: string } {
+  if (head.withPaths) return { options: { ...options, onlyIfPublished: true } };
+  const note = nothingPublishedNote(root, logger, options, head.config.ignore);
+  return note ? { note } : { options };
 }
 
 /** Impact mode's options for analyze(), or why it does not run. */
@@ -390,8 +422,9 @@ function impactSetup(
   const prepared = prepareInputImpact(root, config, request, logger);
   if ('skip' in prepared) return { note: `impact: skipped (${prepared.skip})` };
   for (const n of prepared.notes) logger.info(`impact: ${n}`);
-  const unpublished = auto ? nothingPublishedNote(root, logger, prepared.options) : undefined;
-  return unpublished ? { note: unpublished } : { options: prepared.options };
+  return auto
+    ? autoImpact(root, logger, prepared.options, { config, withPaths: inputs.paths.length > 0 })
+    : { options: prepared.options };
 }
 
 function pluginsAllowed(value: 'auto' | 'true' | 'false'): boolean {
@@ -711,7 +744,7 @@ async function analyzeRoot(
   );
   if (impact.note) core.info(impact.note);
 
-  return log.group(`flowpact ${inputs.mode}: analyze`, async () => {
+  const result = await log.group(`flowpact ${inputs.mode}: analyze`, async () => {
     const registry = createRegistry();
     if (inputs.plugins) await loadPlugins(root, loaded.config, registry, logger);
     if (extraPlugins.length)
@@ -729,15 +762,58 @@ async function analyzeRoot(
       ...(impact.options ? { impact: impact.options } : {}),
     });
   });
+  if (result.impactSkipped) core.info(`impact: skipped (${result.impactSkipped})`);
+  for (const n of result.impactNotes ?? []) core.info(`impact: ${n}`);
+  return result;
+}
+
+/**
+ * The paths that name no workflow or action of the working tree yet do not fail the step. In impact mode, a path that
+ * names a workflow or action of the baseline stands for what the change removed. When impact mode was asked for but
+ * skipped on `merge_group` or `push`, there is no baseline to tell a removed path from a mistake, so a path that would
+ * fail the step (one the working tree lacks, or one that holds no workflow or action, such as a removed action's
+ * directory that keeps its README) is a warning: these events usually follow a pull request's run, which has the
+ * baseline and refuses a mistake, though not always (a new branch's first push comes before any; `impact: on` compares
+ * a later push with the commit before it). On other events (`pull_request_target`, `schedule`, `workflow_dispatch`) no
+ * such run comes first, so a skipped impact mode fails the step on such a path, as 0.14 did.
+ */
+function unrefused(result: AnalysisResult, inputs: Inputs, where: string): string[] {
+  const skipped =
+    inputs.impact !== 'off' &&
+    !result.impact &&
+    !result.impactSkipped &&
+    followsPullRequest(process.env.GITHUB_EVENT_NAME);
+  if (!skipped) return result.removedPaths ?? [];
+  const { missingTargets: missing = [], ignoredTargets = [], targets, wholeRepository } = result.project;
+  // Beside a path that names a workflow or action, one that holds none does not fail the step anyway.
+  const empty = targets.size || wholeRepository ? [] : ignoredTargets;
+  const warn = (what: string, paths: string[]) => {
+    if (paths.length)
+      core.warning(
+        `${what} under ${where}: ${paths.join(', ')}. Not refused while impact mode is skipped, as the change may have removed them.`,
+      );
+  };
+  warn('paths not found', missing);
+  warn('paths without a workflow or action', empty);
+  return [...missing, ...empty];
+}
+
+/** Why the paths give nothing to report on: some do not exist, or none names a workflow or action. */
+function badPaths(result: AnalysisResult, inputs: Inputs, where: string): string | undefined {
+  const removed = unrefused(result, inputs, where);
+  const missing = (result.project.missingTargets ?? []).filter((p) => !removed.includes(p));
+  if (missing.length) return `paths not found under ${where}: ${missing.join(', ')}`;
+  const { targets, wholeRepository } = result.project;
+  if (inputs.paths.length && targets.size === 0 && !wholeRepository && !removed.length)
+    return `None of the paths is a workflow (.github/workflows/*.yml) or an action (action.yml): ${inputs.paths.join(', ')}`;
+  return undefined;
 }
 
 /** Why the step fails without a report: paths that do not exist or name no workflow or action, or no workflows at all. */
 function nothingAnalyzed(result: AnalysisResult, inputs: Inputs, prefix: string): string | undefined {
   const where = prefix || '.';
-  const missing = result.project.missingTargets ?? [];
-  if (missing.length) return `paths not found under ${where}: ${missing.join(', ')}`;
-  if (inputs.paths.length && result.project.targets.size === 0 && !result.project.wholeRepository)
-    return `None of the paths is a workflow (.github/workflows/*.yml) or an action (action.yml): ${inputs.paths.join(', ')}`;
+  const paths = badPaths(result, inputs, where);
+  if (paths) return paths;
   if (result.summary.workflows === 0 && result.summary.actions === 0)
     return `No workflows found under ${where}/.github/workflows. Set working-directory to the repository that holds them.`;
   return undefined;

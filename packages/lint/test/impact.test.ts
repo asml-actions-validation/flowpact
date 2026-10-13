@@ -461,3 +461,300 @@ describe('review fixes', () => {
     expect(v.ok).toBe(true);
   });
 });
+
+describe('paths narrow impact mode', () => {
+  const action = (name: string, inputs = '') =>
+    `name: ${name}\ndescription: d\n${inputs}runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo "${inputs ? '${{ inputs.token }}' : 'hi'}"\n`;
+  const token = 'inputs:\n  token: { description: t, required: false }\n';
+  const publish = ['*/action.yml'];
+  const config = parseConfig({ impact: { publish } });
+  /** Base: actions a and b, both with an input; the head removes b's input (a major change), or b itself. */
+  const base = { 'a/action.yml': action('a', token), 'b/action.yml': action('b', token) };
+  const changed = { 'a/action.yml': action('a', token), 'b/action.yml': action('b') };
+  const run = (head: Record<string, string>, paths?: string[]) =>
+    analyze({
+      root: '/v',
+      fs: memoryFileSystem(head),
+      config,
+      validateSchema: false,
+      repository: 'a/b',
+      ...(paths ? { paths } : {}),
+      impact: {
+        base: index(base, publish),
+        baseline: { kind: 'ref', ref: 'main', commit: 'abc' },
+        declared: { explicit: 'patch' },
+        policy: { ...DEFAULT_IMPACT_POLICY, publish },
+      },
+    });
+
+  it('grades only the published units within the paths, so the verdict and the findings agree', () => {
+    const a = run(changed, ['a']);
+    expect(a.impact?.changes).toEqual([]);
+    expect(a.impact?.verdict).toMatchObject({ required: 'none', ok: true });
+    expect(a.impact?.scope).toEqual({ paths: ['a'], units: ['a'] });
+    expect(a.impact?.narrowed).toEqual({ anchor: 'a/action.yml', ignored: [] });
+    expect(a.impact?.publishedFiles).toEqual(['a/action.yml']);
+    expect(codes(a)).toEqual(['FP812']);
+
+    const b = run(changed, ['b/action.yml']);
+    expect(b.impact?.verdict).toMatchObject({ required: 'major', ok: false });
+    expect(b.impact?.scope).toMatchObject({ paths: ['b/action.yml'], units: ['b'] });
+    expect(codes(b)).toContain('FP810');
+  });
+
+  it('grades every published unit without paths, or with the whole repository', () => {
+    for (const r of [run(changed), run(changed, ['.']), run(changed, ['/v'])]) {
+      expect(r.impact?.scope).toBeUndefined();
+      expect(r.impact?.verdict.required).toBe('major');
+      expect(r.impact?.publishedFiles).toEqual(['a/action.yml', 'b/action.yml']);
+    }
+  });
+
+  it('grades a unit the head removed when its baseline path is within the paths, and reports nothing else', () => {
+    const removed = run({ 'a/action.yml': action('a', token) }, ['b']);
+    expect(removed.impact?.changes.map((c) => [c.unit, c.kind, c.level])).toEqual([['b', 'unit', 'major']]);
+    expect(removed.impact?.scope).toEqual({ paths: ['b'], units: ['b'] });
+    expect(removed.removedPaths).toEqual(['b']);
+    // The working tree has nothing at the path, so only impact mode reports: FP810, about b.
+    expect(removed.findings.map((f) => [f.code, f.loc.file])).toEqual([['FP810', 'b/action.yml']]);
+  });
+
+  it('does not grade units within the paths that are not published', () => {
+    const ci = `on: push\njobs:\n${job('t')}`;
+    const r = run({ ...changed, [`${WF}/ci.yml`]: ci }, [`${WF}/ci.yml`]);
+    expect(r.impact?.scope).toEqual({ paths: [`${WF}/ci.yml`], units: [] });
+    expect(r.impact?.narrowed?.anchor).toBe(`${WF}/ci.yml`);
+    expect(r.impact?.verdict).toMatchObject({ required: 'none', ok: true });
+    expect(r.impact?.changes).toEqual([]);
+  });
+
+  it('reports the verdict on a file within the paths when none of them holds a published unit', () => {
+    // 0.14 and the first cut placed FP811-FP813 on the root action.yml: outside the paths, and here missing.
+    const ci = `on: push\njobs:\n${job('t')}`;
+    const head = { ...changed, [`${WF}/ci.yml`]: ci, [`${WF}/docs.yml`]: ci };
+    const r = run(head, [WF]);
+    expect(r.impact?.verdict).toMatchObject({ required: 'none', ok: true });
+    expect(r.findings.map((f) => `${f.code}@${f.loc.file}`)).toEqual([`FP812@${WF}/ci.yml`]);
+    // Within the paths, a published unit graded in the working tree comes first.
+    expect(run(head, [WF, 'a']).findings.map((f) => f.loc.file)).toEqual(['a/action.yml']);
+  });
+
+  it('does not run impact mode on paths that hold nothing to grade or report on', () => {
+    // The paths name only an unpublished workflow the change removed: nothing within them is left to report on.
+    const ci = `on: push\njobs:\n${job('t')}`;
+    const base = { 'a/action.yml': action('a', token), [`${WF}/ci.yml`]: ci };
+    const r = analyze({
+      root: '/v',
+      fs: memoryFileSystem({ 'a/action.yml': action('a', token) }),
+      config,
+      validateSchema: false,
+      repository: 'a/b',
+      paths: [`${WF}/ci.yml`],
+      impact: {
+        base: index(base, publish),
+        baseline: { kind: 'ref', ref: 'main', commit: 'abc' },
+        declared: { title: 'fix: x', labels: ['semver:major'] },
+        policy: { ...DEFAULT_IMPACT_POLICY, publish },
+      },
+    });
+    expect(r.impact).toBeUndefined();
+    expect(r.impactSkipped).toBe('nothing within the paths to grade or to report on');
+    expect(r.removedPaths).toEqual([`${WF}/ci.yml`]);
+    expect(r.findings).toEqual([]);
+  });
+
+  it('knows a removed path also beside the whole repository', () => {
+    const removed = run({ 'a/action.yml': action('a', token) }, ['.', 'b']);
+    expect(removed.removedPaths).toEqual(['b']);
+    expect(removed.impact?.scope).toBeUndefined();
+    expect(removed.impact?.verdict.required).toBe('major');
+  });
+
+  it('reports on nothing else when every path is one the working tree lacks', () => {
+    // Impact mode skipped (no baseline here): the paths still narrow the report, to nothing, instead of widening it to
+    // the whole repository, where c has a finding (an empty `inputs:`).
+    const fs = memoryFileSystem({ ...changed, 'c/action.yml': action('c', 'inputs:\n') });
+    const lint = (paths?: string[]) =>
+      analyze({
+        root: '/v',
+        fs,
+        config,
+        validateSchema: false,
+        repository: 'a/b',
+        ...(paths ? { paths } : {}),
+      });
+    expect(lint().findings.length).toBeGreaterThan(0);
+    const gone = lint(['gone']);
+    expect(gone.project.missingTargets).toEqual(['gone']);
+    expect(gone.findings).toEqual([]);
+  });
+
+  it('grades only the given units in impactChanges', () => {
+    const all = impactChanges(index(base, publish), index(changed, publish), { publish });
+    expect(all.map((c) => c.unit)).toEqual(['b']);
+    expect(
+      impactChanges(index(base, publish), index(changed, publish), { publish }, undefined, new Set(['a'])),
+    ).toEqual([]);
+  });
+});
+
+describe('ignore leaves units out of impact mode', () => {
+  const action = (name: string, inputs = '') =>
+    `name: ${name}\ndescription: d\n${inputs}runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo "${inputs ? '${{ inputs.token }}' : 'hi'}"\n`;
+  const token = 'inputs:\n  token: { description: t, required: false }\n';
+  const publish = ['*/action.yml'];
+  /** Base: published actions a and b with an input; the head removes b's input, a major change. */
+  const base = { 'a/action.yml': action('a', token), 'b/action.yml': action('b', token) };
+  const head = { 'a/action.yml': action('a', token), 'b/action.yml': action('b') };
+  const ci = `on: push\njobs:\n${job('t')}`;
+  /**
+   * `ignore` is the baseline config's, which impact mode reads; `own` the pull request's (the checked-out config). The
+   * head may hold more files (`extra`).
+   */
+  const run = (
+    ignore: string[],
+    declared: DeclaredInput,
+    paths?: string[],
+    own: string[] = ignore,
+    extra: Record<string, string> = {},
+    onlyIfPublished = false,
+  ) =>
+    analyze({
+      root: '/v',
+      fs: memoryFileSystem({ ...head, ...extra }),
+      config: parseConfig({ ignore: own, impact: { publish } }),
+      validateSchema: false,
+      repository: 'a/b',
+      ...(paths ? { paths } : {}),
+      impact: {
+        base: index(base, publish),
+        baseline: { kind: 'ref', ref: 'main', commit: 'abc' },
+        declared,
+        policy: { ...DEFAULT_IMPACT_POLICY, publish },
+        ignore,
+        ...(onlyIfPublished ? { onlyIfPublished } : {}),
+      },
+    });
+  const located = (r: ReturnType<typeof run>) => r.findings.map((f) => `${f.code}@${f.loc.file}`);
+
+  it('does not grade a published unit whose file is ignored, so the verdict and the findings agree', () => {
+    // 0.14 graded b anyway: "required major, ok: false" with the FP810 about b dropped by ignore, and exit 0.
+    const r = run(['b/**'], { explicit: 'patch' });
+    expect(r.impact?.changes).toEqual([]);
+    expect(r.impact?.verdict).toMatchObject({ required: 'none', ok: true });
+    expect(r.impact?.publishedFiles).toEqual(['a/action.yml']);
+    expect(located(r)).toEqual(['FP812@a/action.yml']);
+    // With paths too; paths that hold only ignored files leave nothing to report on.
+    expect(run(['b/**'], { explicit: 'patch' }, ['a', 'b']).impact?.verdict).toMatchObject({
+      required: 'none',
+    });
+    expect(run(['b/**'], { explicit: 'patch' }, ['b']).impactSkipped).toBeDefined();
+    // Not ignored, b is graded as before.
+    expect(run([], { explicit: 'patch' }).impact?.verdict).toMatchObject({ required: 'major', ok: false });
+  });
+
+  it("leaves a unit out only when both the baseline's and the pull request's ignore match it", () => {
+    // A pull request that breaks b and adds b/** to ignore is still graded for b; the edit applies once merged.
+    const added = run([], { explicit: 'patch' }, undefined, ['b/**']);
+    expect(added.impact?.verdict).toMatchObject({ required: 'major', ok: false });
+    expect(located(added)).toEqual(['FP810@b/action.yml']);
+    expect(added.impactNotes).toEqual([
+      'this pull request changes what ignore leaves out of impact mode (b); that applies after it is merged',
+    ]);
+    // Before: a pull request that broke b and took it out of the baseline's ignore graded nothing and passed, where
+    // 0.14 failed with FP810. Taken out of ignore, b is graded at once, so nothing waits for the merge to be noted.
+    const removed = run(['b/**'], { explicit: 'patch' }, undefined, []);
+    expect(removed.impact?.verdict).toMatchObject({ required: 'major', ok: false });
+    expect(located(removed)).toEqual(['FP810@b/action.yml']);
+    expect(removed.impact?.narrowed).toBeUndefined();
+    expect(removed.impactNotes).toBeUndefined();
+    // With paths that hold b too.
+    expect(located(run(['b/**'], { explicit: 'patch' }, ['b'], []))).toEqual(['FP810@b/action.yml']);
+    // Different patterns that both match b leave it out, and only it.
+    const both = run(['*/action.yml'], { explicit: 'patch' }, undefined, ['b/**']);
+    expect(both.impact?.verdict).toMatchObject({ required: 'none', ok: true });
+    expect(both.impact?.narrowed).toEqual({ ignored: ['b'], anchor: 'a/action.yml' });
+    expect(both.impactNotes).toBeUndefined();
+    // Only an edit that adds a published unit within the paths is noted: here b is not within them.
+    expect(run([], { explicit: 'patch' }, ['a'], ['x/**']).impactNotes).toBeUndefined();
+    expect(run([], { explicit: 'patch' }, ['a'], ['b/**']).impactNotes).toBeUndefined();
+  });
+
+  it('names a unit as left out by ignore only when no file of it is graded', () => {
+    // b/action.yml becomes b/action.yaml and loses its input; both sides ignore b/action.yml, which no longer matches.
+    const both = ['*/action.yml', '*/action.yaml'];
+    const r = analyze({
+      root: '/v',
+      fs: memoryFileSystem({ 'a/action.yml': action('a', token), 'b/action.yaml': action('b') }),
+      config: parseConfig({ ignore: ['b/action.yml'], impact: { publish: both } }),
+      validateSchema: false,
+      repository: 'a/b',
+      impact: {
+        base: index(base, both),
+        baseline: { kind: 'ref', ref: 'main', commit: 'abc' },
+        declared: { explicit: 'patch' },
+        policy: { ...DEFAULT_IMPACT_POLICY, publish: both },
+        ignore: ['b/action.yml'],
+      },
+    });
+    expect(r.impact?.verdict).toMatchObject({ required: 'major', ok: false });
+    expect(r.impact?.changes.map((c) => c.unit)).toContain('b');
+    expect(located(r)).toEqual(['FP810@b/action.yaml']);
+    // Before: ['b'] as well, so the report said both "major b" and "left out by ignore: b".
+    expect(r.impact?.narrowed?.ignored).toEqual([]);
+  });
+
+  it('reports a failing verdict on a file ignore leaves in when it leaves out every published unit', () => {
+    // Nothing graded: a conflict between the declarations still fails, and its finding must say so, on a file that
+    // exists. Before: on the root action.yml, which this repository does not have.
+    const conflict = { title: 'fix: x', labels: ['semver:major'] };
+    const r = run(['*/action.yml'], conflict, undefined, undefined, { [`${WF}/ci.yml`]: ci });
+    expect(r.impact?.verdict).toMatchObject({ required: 'none', ok: false });
+    expect(located(r)).toEqual([`FP811@${WF}/ci.yml`, `FP812@${WF}/ci.yml`]);
+    expect(r.impact?.narrowed).toEqual({ anchor: `${WF}/ci.yml`, ignored: ['a', 'b'] });
+    expect(r.summary.errors).toBe(1);
+    // A published unit that is graded comes first.
+    expect(located(run(['b/**'], conflict, undefined, undefined, { [`${WF}/ci.yml`]: ci }))).toEqual([
+      'FP811@a/action.yml',
+      'FP812@a/action.yml',
+    ]);
+  });
+
+  it('runs with paths that hold only ignored published units, on a file within them that ignore leaves in', () => {
+    // impact: on and the CLI: nothing is graded, the required impact is none, and the declaration is still checked.
+    const conflict = { title: 'fix: x', labels: ['semver:major'] };
+    const r = run(['b/**'], conflict, ['b', `${WF}/ci.yml`], undefined, { [`${WF}/ci.yml`]: ci });
+    expect(r.impact?.verdict).toMatchObject({ required: 'none', ok: false });
+    expect(r.impact?.scope).toEqual({ paths: ['b', `${WF}/ci.yml`], units: [] });
+    expect(r.impact?.narrowed).toEqual({ anchor: `${WF}/ci.yml`, ignored: ['b'] });
+    expect(located(r)).toEqual([`FP811@${WF}/ci.yml`, `FP812@${WF}/ci.yml`]);
+    // With no such file within the paths, it is skipped, and says that ignore left everything there out. Before:
+    // "nothing within the paths to grade or to report on", which did not name ignore although b is there.
+    const only = run(['b/**'], conflict, ['b'], undefined, { [`${WF}/ci.yml`]: ci });
+    expect(only.impact).toBeUndefined();
+    expect(only.impactSkipped).toBe(
+      'every workflow and action within the paths is ignored: nothing to grade or to report on',
+    );
+    expect(only.findings).toEqual([]);
+  });
+
+  it('skips impact mode when ignore leaves out every workflow and action', () => {
+    // Before: FP811 and FP812 on the root action.yml, which this repository does not have.
+    const r = run(['**'], { title: 'fix: x', labels: ['semver:major'] });
+    expect(r.impact).toBeUndefined();
+    expect(r.impactSkipped).toBe('every workflow and action is ignored: nothing to grade or to report on');
+    expect(r.findings).toEqual([]);
+  });
+
+  it('says ignore, not impact.publish, when it leaves out every published unit within the paths', () => {
+    const skipped = (ignore: string[], paths: string[]) =>
+      run(ignore, { explicit: 'patch' }, paths, undefined, { [`${WF}/ci.yml`]: ci }, true).impactSkipped;
+    expect(skipped(['b/**'], ['b'])).toBe(
+      'every published workflow or action within the paths is ignored; see ignore',
+    );
+    expect(skipped([], [`${WF}/ci.yml`])).toBe(
+      'no published workflow or action within the paths; see impact.publish',
+    );
+    expect(skipped(['b/**'], ['a', 'b'])).toBeUndefined();
+  });
+});

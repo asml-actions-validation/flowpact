@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { relative, resolve } from 'node:path';
 import {
   compareLoc,
   declaredMatrix,
@@ -26,10 +27,20 @@ import {
   type ContractPlan,
   type ContractPlanEntry,
   contractsInScope,
+  pathHolds,
   planContracts,
   scopePlan,
 } from './contracts';
-import { computeImpact, type DeclaredInput, type ImpactPolicy, type ImpactResult } from './impact';
+import {
+  computeImpact,
+  type DeclaredInput,
+  type ImpactLookAt,
+  type ImpactNarrowed,
+  type ImpactPaths,
+  type ImpactPolicy,
+  type ImpactResult,
+  type ImpactScope,
+} from './impact';
 import { createRegistry, IMPACT_CODES } from './rules/index';
 import { CODE_PATTERN, type RuleRegistry } from './rules/registry';
 import type {
@@ -66,6 +77,23 @@ export interface AnalyzeOptions {
     policy: ImpactPolicy;
     /** Files of the units the baseline published; their head versions are loaded even when nothing uses them. */
     publishedFiles?: string[];
+    /**
+     * The baseline config's `ignore`: impact mode does not grade a unit whose file both it and the pull request's own
+     * `ignore` (the config's) match, so a pull request can neither ignore its way past the gate nor slip a change through
+     * by taking a unit out of `ignore`. Without it, every published unit is graded.
+     */
+    ignore?: readonly string[];
+    /**
+     * A base config of the repository whose version in the baseline cannot be read (a submodule's commit the clone
+     * lacks), so `ignore` lacks what it lists: the units only the pull request's `ignore` matches are graded, and the
+     * note about them does not say that they are left out once the pull request is merged.
+     */
+    ignoreUnread?: string;
+    /**
+     * Run only when the paths hold a published unit that `ignore` does not leave out, in the baseline or the working
+     * tree (the action's `impact: auto`). Without paths, the caller decides that beforehand.
+     */
+    onlyIfPublished?: boolean;
   };
   /** Compare against the contracts in `.github/flowpact/` (`flowpact check`). */
   checkContracts?: boolean;
@@ -119,6 +147,20 @@ export interface AnalysisResult {
   configSource?: SourceFile;
   /** Impact mode's changes and verdict, when it ran. */
   impact?: ImpactResult;
+  /**
+   * Why impact mode did not run although it was set up: nothing to grade or to report on, i.e. nothing published (within
+   * the paths) is graded and no workflow or action of the working tree (within them) is left that `ignore` does not
+   * leave out (say, only what the change removed, or an `ignore` that matches everything); or, with paths, nothing
+   * published within them, when it runs only then (`onlyIfPublished`).
+   */
+  impactSkipped?: string;
+  /**
+   * Impact mode: the paths, as given, that name no workflow or action of the working tree but one of the baseline (or a
+   * directory that held one): what the change removed. Such a path is not missing.
+   */
+  removedPaths?: string[];
+  /** Notes about how impact mode graded, which callers print as `impact: <note>`. */
+  impactNotes?: string[];
   /**
    * Config entries naming rules that are not loaded, such as the rules of a plugin that this run does not load. They
    * are ignored for this run, and logged as a warning.
@@ -371,11 +413,22 @@ function selectRules(
   return { severities, only: only?.map((o) => registry.get(o)!.code) };
 }
 
+/** What paths narrow the report to. */
+interface ReportScope {
+  /**
+   * Whether paths narrow it: any paths but the whole repository, even when they name no workflow or action of the
+   * working tree (callers refuse such paths, except in impact mode where they name what the change removed).
+   */
+  narrowed: boolean;
+  /** Whether a contract is in scope (with paths: of a target, or listing one as a consumer). */
+  contractInScope: (e: ContractPlanEntry) => boolean;
+}
+
 /** Check mode: the contracts on disk compared with the current ones (with paths, only the contracts in scope). */
 function compareContracts(
   opts: AnalyzeOptions,
   index: ProjectIndex,
-  contractInScope: (e: ContractPlanEntry) => boolean,
+  scope: ReportScope,
   logger: Logger,
 ): ContractPlan | undefined {
   if (!opts.checkContracts) return undefined;
@@ -383,7 +436,7 @@ function compareContracts(
     planContracts(index, opts.fs ?? nodeFileSystem(opts.root)),
   );
   // With paths, only the contracts in scope count (drift output, patch, summary).
-  if (index.project.targets.size > 0) contracts = scopePlan(contracts, contractInScope);
+  if (scope.narrowed) contracts = scopePlan(contracts, scope.contractInScope);
   logger.info(
     `contracts: ${contracts.counts.unchanged} unchanged, ${contracts.counts.update} outdated, ${contracts.counts.create} missing, ${contracts.counts.delete} orphaned`,
     { breaking: contracts.breaking },
@@ -391,13 +444,107 @@ function compareContracts(
   return contracts;
 }
 
-/** Impact mode's changes and verdict, when it runs. */
-function impactOf(opts: AnalyzeOptions, index: ProjectIndex, logger: Logger): ImpactResult | undefined {
+/** A path relative to the root, with `/` separators. */
+const rootRelative = (root: string, path: string) =>
+  relative(root, resolve(root, path)).split('\\').join('/') || '.';
+
+/**
+ * Impact mode: the paths, as given, that name no workflow or action of the working tree but one of the baseline, or a
+ * directory that held one. They name what the change removed, so they are neither missing nor beside the point.
+ */
+function removedPathsOf(opts: AnalyzeOptions, project: Project): string[] {
+  if (!opts.impact) return [];
+  const absent = [...(project.missingTargets ?? []), ...(project.ignoredTargets ?? [])];
+  const baseFiles = opts.impact.base.units().map((u) => u.file);
+  return absent.filter((p) => baseFiles.some((f) => pathHolds(rootRelative(opts.root, p), f)));
+}
+
+/** Impact mode's paths: the paths given, unless there are none or one is the whole repository. */
+function impactPathsOf(opts: AnalyzeOptions, project: Project): ImpactPaths | undefined {
+  if (!opts.impact || !opts.paths?.length || project.wholeRepository) return undefined;
+  return {
+    paths: opts.paths.map((given) => ({ given, relative: rootRelative(opts.root, given) })),
+    targets: project.targets,
+  };
+}
+
+/**
+ * Why impact mode does not run with these paths: nothing published within them when it runs only then (`impact:
+ * auto`), or nothing to grade or to report on, i.e. nothing published and no workflow or action of the working tree
+ * within them that `ignore` does not leave out: `ignored` when `ignore` left out what is there, else the paths hold
+ * only what the change removed.
+ */
+function pathsSkip(
+  scope: ImpactScope,
+  narrowed: ImpactNarrowed,
+  onlyIfPublished: boolean | undefined,
+  ignored: boolean,
+): string | undefined {
+  if (scope.units.length) return undefined;
+  if (onlyIfPublished)
+    return narrowed.ignored.length
+      ? 'every published workflow or action within the paths is ignored; see ignore'
+      : 'no published workflow or action within the paths; see impact.publish';
+  if (narrowed.anchor) return undefined;
+  return ignored
+    ? 'every workflow and action within the paths is ignored: nothing to grade or to report on'
+    : 'nothing within the paths to grade or to report on';
+}
+
+/**
+ * Why impact mode does not run: with paths, see `pathsSkip`; without, `ignore` leaves out every workflow and action, so
+ * nothing is graded and there is no file to report on. `targets` counts the workflow and action files the paths name.
+ */
+function impactSkip(
+  impact: ImpactResult,
+  onlyIfPublished: boolean | undefined,
+  targets: number,
+): string | undefined {
+  const { scope, narrowed } = impact;
+  if (!narrowed) return undefined;
+  // Without an anchor, every file the paths name is one that ignore leaves out.
+  if (scope) return pathsSkip(scope, narrowed, onlyIfPublished, narrowed.ignored.length > 0 || targets > 0);
+  if (impact.publishedFiles.length || narrowed.anchor) return undefined;
+  return 'every workflow and action is ignored: nothing to grade or to report on';
+}
+
+/**
+ * Notes about how impact mode graded: the published units only the pull request's `ignore` matches, graded until it is
+ * merged, or, when the baseline's version of a base config (`unread`) cannot be read, graded for that.
+ */
+function gradingNotes(impact: ImpactResult, unread: string | undefined): string[] {
+  if (!impact.ignoreAdded) return [];
+  const units = impact.ignoreAdded.join(', ');
+  return [
+    unread
+      ? `the baseline's ignore lacks what the pull request's leaves out of impact mode (${units}), as the baseline's version of ${unread} cannot be read; they are graded`
+      : `this pull request changes what ignore leaves out of impact mode (${units}); that applies after it is merged`,
+  ];
+}
+
+/**
+ * Impact mode's changes and verdict, when it runs: about the published units it looks at (with paths, those within
+ * them; never one whose file both the baseline's and the pull request's `ignore` match). With nothing to grade or
+ * report on, why it does not.
+ */
+function impactOf(
+  opts: AnalyzeOptions,
+  index: ProjectIndex,
+  lookAt: ImpactLookAt,
+  logger: Logger,
+): Pick<RuleRun, 'impact' | 'impactSkipped' | 'impactNotes'> {
   const impact = opts.impact;
-  if (!impact) return undefined;
-  return logger.time('impact', () =>
-    computeImpact(impact.base, index, impact.baseline, impact.declared, impact.policy),
+  if (!impact) return { impact: undefined };
+  const result = logger.time('impact', () =>
+    computeImpact(impact.base, index, impact.baseline, impact.declared, impact.policy, lookAt),
   );
+  const skipped = impactSkip(result, impact.onlyIfPublished, index.project.targets.size);
+  // The notes hold whether impact mode runs or not.
+  const notes = gradingNotes(result, impact.ignoreUnread);
+  return {
+    ...(skipped ? { impact: undefined, impactSkipped: skipped } : { impact: result }),
+    ...(notes.length ? { impactNotes: notes } : {}),
+  };
 }
 
 /** What running the rules of one analysis needs. */
@@ -413,6 +560,10 @@ interface RuleRun {
   configFile: string | undefined;
   contracts: ContractPlan | undefined;
   impact: ImpactResult | undefined;
+  /** Why impact mode did not run although it was set up. */
+  impactSkipped?: string;
+  /** Notes about how impact mode graded, whether it ran or not. */
+  impactNotes?: string[];
   /** Generated files, whose internals rules with `generatedFiles: 'skip'` stay quiet about. */
   generatedFiles: Map<string, string>;
   /** Whether a rule runs in this analysis (`ctx.runs`). */
@@ -524,30 +675,32 @@ function judgeOverride(u: OverrideUsage, run: RuleRun, opts: AnalyzeOptions): vo
 }
 
 /**
- * Whether a finding is reported: with paths, it is about a targeted file or a contract in scope, and no `ignore`
- * pattern matches its file.
+ * Whether a finding is reported: impact mode's always (it grades only the published units within the paths that
+ * `ignore` does not leave out, so its findings and its verdict agree); any other with paths when it is about a targeted
+ * file or a contract in scope, and when no `ignore` pattern matches its file.
  */
 function scopeOf(
   index: ProjectIndex,
   config: FlowpactConfig,
   contracts: ContractPlan | undefined,
-  contractInScope: (e: ContractPlanEntry) => boolean,
+  scope: ReportScope,
 ): (f: Finding) => boolean {
   const { targets } = index.project;
   // The contract of a targeted workflow belongs to it (e.g. a conflicted contract, FP805), and so do the contracts
   // that list it as a consumer.
-  const scopedEntries = (contracts?.entries ?? []).filter(contractInScope);
+  const scopedEntries = (contracts?.entries ?? []).filter(scope.contractInScope);
   const contractFilesInScope = new Set(scopedEntries.map((e) => e.file));
   // Contract findings are reported on the workflow they describe; they follow their contract into scope.
   const contractUnitsInScope = new Set(
     scopedEntries.flatMap((e) => (e.unit ? [index.unit(e.unit)?.file ?? e.unit] : [])),
   );
   return (f) =>
-    (targets.size === 0 ||
+    IMPACT_CODES.includes(f.code) ||
+    ((!scope.narrowed ||
       targets.has(f.loc.file) ||
       contractFilesInScope.has(f.loc.file) ||
       (f.category === 'contracts' && contractUnitsInScope.has(f.loc.file))) &&
-    !config.ignore.some((p) => matchesPattern(f.loc.file, p));
+      !config.ignore.some((p) => matchesPattern(f.loc.file, p)));
 }
 
 /** Logs what the scope, generated files and overrides took out of the findings. */
@@ -599,11 +752,27 @@ function metaOf(opts: AnalyzeOptions, repository: string | undefined): AnalysisR
   };
 }
 
+/** Impact mode's part of the result: its verdict or why it was skipped, notes on how it graded, the removed paths. */
+function impactFieldsOf(
+  run: RuleRun,
+  removedPaths: string[] | undefined,
+): Pick<AnalysisResult, 'impact' | 'impactSkipped' | 'impactNotes' | 'removedPaths'> {
+  return {
+    ...(run.impact ? { impact: run.impact } : {}),
+    ...(run.impactSkipped ? { impactSkipped: run.impactSkipped } : {}),
+    ...(run.impactNotes ? { impactNotes: run.impactNotes } : {}),
+    ...(removedPaths?.length ? { removedPaths } : {}),
+  };
+}
+
 /** The analysis result, from what the run produced. */
 function resultOf(
   opts: AnalyzeOptions,
   run: RuleRun,
-  r: Pick<AnalysisResult, 'project' | 'findings' | 'summary' | 'suppressed' | 'durationMs'> & {
+  r: Pick<
+    AnalysisResult,
+    'project' | 'findings' | 'summary' | 'suppressed' | 'durationMs' | 'removedPaths'
+  > & {
     repository: string | undefined;
     unloaded: string[];
   },
@@ -622,7 +791,7 @@ function resultOf(
     suppressed: r.suppressed,
     ...(run.contracts ? { contracts: run.contracts } : {}),
     ...(r.unloaded.length ? { unloadedRules: r.unloaded } : {}),
-    ...(run.impact ? { impact: run.impact } : {}),
+    ...impactFieldsOf(run, r.removedPaths),
     ...(opts.configFile && opts.configText !== undefined
       ? { configSource: new SourceFile(opts.configFile, opts.configText) }
       : {}),
@@ -636,7 +805,7 @@ function prepareRules(
   logger: Logger,
   base: Pick<RuleRun, 'registry' | 'index' | 'config' | 'matrix'>,
   unloaded: string[],
-): { run: RuleRun; contractInScope: (e: ContractPlanEntry) => boolean } {
+): { run: RuleRun; scope: ReportScope } {
   const { registry, index, config } = base;
   const { severities, only } = selectRules(registry, config, opts.only, unloaded);
   const ruleLog = logger.child('rules');
@@ -644,9 +813,20 @@ function prepareRules(
   // internals (`generatedFiles: 'skip'`) stay quiet: nobody can act on them in the file itself.
   const generatedFiles = generatedFilesOf(index.project, config);
   for (const [file, marker] of generatedFiles) logger.debug(`generated file: ${file}`, { marker });
-  const contractInScope = contractsInScope(index);
-  const contracts = compareContracts(opts, index, contractInScope, logger);
-  const impact = impactOf(opts, index, logger);
+  const within = impactPathsOf(opts, index.project);
+  const scope: ReportScope = {
+    narrowed: Boolean(opts.paths?.length) && !index.project.wholeRepository,
+    contractInScope: contractsInScope(index, { root: opts.root, paths: opts.paths ?? [] }),
+  };
+  const contracts = compareContracts(opts, index, scope, logger);
+  // A unit is left out only when both the baseline's `ignore` and the pull request's own match it.
+  const baselineIgnore = opts.impact?.ignore;
+  const lookAt: ImpactLookAt = {
+    ...(within ? { within } : {}),
+    ...(baselineIgnore ? { ignore: { baseline: baselineIgnore, head: config.ignore } } : {}),
+  };
+  const impact = impactOf(opts, index, lookAt, logger);
+  if (impact.impactSkipped) logger.debug(`impact: skipped (${impact.impactSkipped})`);
   const run = ruleRun({
     ...base,
     severities,
@@ -654,10 +834,10 @@ function prepareRules(
     ruleLog,
     configFile: opts.configFile,
     contracts,
-    impact,
+    ...impact,
     generatedFiles,
   });
-  return { run, contractInScope };
+  return { run, scope };
 }
 
 /**
@@ -668,7 +848,7 @@ function runPhases(
   run: RuleRun,
   opts: AnalyzeOptions,
   logger: Logger,
-  contractInScope: (e: ContractPlanEntry) => boolean,
+  scope: ReportScope,
   unloaded: string[],
 ): { kept: Finding[]; suppressed: SuppressedFinding[]; skippedInScope: Finding[] } {
   const { config } = run;
@@ -686,7 +866,7 @@ function runPhases(
   if (unloaded.length)
     logger.warn(`ignoring config entries for rules that are not loaded: ${unloaded.join('; ')}`);
   for (const u of applied.usage) judgeOverride(u, run, opts);
-  const inScope = scopeOf(run.index, config, run.contracts, contractInScope);
+  const inScope = scopeOf(run.index, config, run.contracts, scope);
   const accepted = applied.kept.filter(inScope);
   const suppressed = applied.suppressed.filter(inScope);
   const skippedInScope = dedupe(run.skipped).filter(inScope);
@@ -716,8 +896,8 @@ export function analyze(opts: AnalyzeOptions): AnalysisResult {
   const { matrix, combinations } = expandMatrices(project, config, logger);
 
   const unloaded: string[] = [];
-  const { run, contractInScope } = prepareRules(opts, logger, { registry, index, config, matrix }, unloaded);
-  const { kept, suppressed, skippedInScope } = runPhases(run, opts, logger, contractInScope, unloaded);
+  const { run, scope } = prepareRules(opts, logger, { registry, index, config, matrix }, unloaded);
+  const { kept, suppressed, skippedInScope } = runPhases(run, opts, logger, scope, unloaded);
 
   const summary = summarize(project, index, kept, combinations(), suppressed.length, skippedInScope.length);
   const durationMs = Math.round(performance.now() - started);
@@ -733,6 +913,7 @@ export function analyze(opts: AnalyzeOptions): AnalysisResult {
     suppressed,
     unloaded,
     durationMs,
+    removedPaths: removedPathsOf(opts, project),
   });
 }
 

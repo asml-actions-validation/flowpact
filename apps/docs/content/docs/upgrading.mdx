@@ -7,6 +7,67 @@ A minor release can change what is reported; an incompatible change to the CLI, 
 reports or the API is a major release (the next one is 1.0.0). Up to 0.14, such a change could also come in a minor
 release. Each section below lists what to do when you move to that release.
 
+## 0.14 → 0.15
+
+0.15 changes what some runs report. Each change below says what to do about it.
+
+### Move to the new version
+
+- **GitHub Action:** `uses: ciatlas/flowpact@v0.15`.
+- **CLI:** `npx flowpact@0.15`, or update the dev dependency.
+- **VS Code:** the extension updates itself.
+
+### Impact mode honours paths
+
+[Impact mode](/docs/impact-mode#only-some-units) with paths (`lint --impact <paths>`, `check --impact <paths>`, the
+action's `paths` input with `impact`, the API's `paths`) now grades only the published workflows and actions within
+them. Before, it graded every published unit but reported only the findings about files within the paths, so a
+breaking change elsewhere could pass silently: the verdict said `required major` and the run passed. Now the verdict
+and the findings agree. If your impact check passes paths, it now guards only the units within them: drop the paths
+to gate every published unit. `flowpact impact` takes paths too, where 0.14 refused them.
+
+A removed or renamed unit is graded only when its old path, or a directory holding it, is among the paths, so prefer
+directory paths (`actions/`) in the action's `paths` input; a path that names only the removed unit fails later pull
+requests once the removal is merged. A path the change removed is no longer refused as missing in impact mode. Where
+impact mode is skipped on `merge_group` or `push`, such a path is only warned about, as is a removed action's directory
+that keeps other files, and so is a mistyped path: without a baseline the two cannot be told apart. These events
+usually follow a pull request's run, which has the baseline and refuses a mistyped path, but not always: the first
+push of a new branch comes before any pull request, and a workflow that runs only on `push` with `impact: auto` never
+refuses one, where 0.14 failed. To have such a workflow refuse it, use `impact: on`, which compares each push with the
+commit before it (a new branch's first push, which has none, still only warns). On other events, a skipped impact mode
+still refuses these paths.
+
+`flowpact graph` takes paths as well, and then draws only those workflows and actions and what they call.
+
+### Orphaned contracts within the paths
+
+`flowpact check <paths>` reports the orphaned contract (`FP804`) of a workflow or action that no longer exists when
+its path lies within the paths, and `flowpact generate <paths>` deletes it; 0.14 left it to runs without paths. A
+`check` job with paths may now fail on such a contract: run `flowpact generate` to delete it.
+
+### Impact mode leaves ignored units out
+
+A published workflow or action whose file both the baseline's `ignore` and the pull request's match is no longer
+graded. 0.14 graded it but dropped its findings, so the verdict could say `required major` while the run passed. Now
+the verdict and the findings agree, and impact mode's findings are never dropped by `ignore`. If an ignored unit is one
+you publish, remove it from `ignore` to gate its changes: the pull request that removes it is already graded for it.
+When `ignore` leaves out every published unit, `impact: auto` skips the run as in a repository that publishes nothing,
+and `impact: on` reports the verdict on the first workflow or action file (within the paths) that is not ignored, or
+is skipped, saying so, when every one is. The reports name the published units `ignore` left out (`left out by
+ignore: …`, and `impact.ignored` in the JSON report).
+
+Because a unit is left out only when the baseline's `ignore` matches it too, a pull request's own `ignore` edit cannot
+take a published unit out of its check: a pull request that adds one to `ignore` is still graded for it. Where it
+under-declares, it now fails with `FP810`, where 0.14 dropped the finding and passed with `impact-ok: false`. Every
+other finding follows the pull request's own `ignore`, as before.
+
+A [base config](/docs/impact-mode#configuration) that the checked-out commit does not track, such as the
+organization's config checked out into an ignored directory of the workspace, now counts on both sides, as one outside
+the repository does: the published units its `ignore` matches are left out, and its impact settings apply to the
+baseline too, where 0.14 left them out as those of a file of the repository. A base config within a submodule is the
+pull request's own, as a file of the repository is, and its `ignore` counts on the baseline's side as the baseline's
+commit of the submodule has it.
+
 ## 0.13 → 0.14
 
 0.14 reads more of what workflows write: a read of a whole object or through a computed key (`toJSON(inputs)`,

@@ -598,6 +598,485 @@ describe('impact mode', () => {
     expect(off.outputs['impact-ok']).toBe('');
   });
 
+  it('grades only the published workflows within paths, and a path the change removed', async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    // Two more reusable workflows on main: one the branch keeps unchanged, one it deletes.
+    g('checkout', '-q', 'main');
+    const other =
+      'on: workflow_call\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{ run: "true" }]\n';
+    writeFileSync(join(workspace, '.github/workflows/other.yml'), other);
+    writeFileSync(join(workspace, '.github/workflows/gone.yml'), other);
+    g('add', '-A');
+    g('commit', '-q', '-m', 'more');
+    g('checkout', '-q', 'change');
+    g('merge', '-q', '--no-edit', 'main');
+    g('rm', '-q', '.github/workflows/gone.yml');
+    g('commit', '-q', '-m', 'gone');
+    const inputs = (paths: string) => ({
+      impact: 'on',
+      'base-ref': 'main',
+      'expected-impact': 'patch',
+      paths,
+    });
+    /** A run of its own: what the runs before it reported is cleared. */
+    const fresh = (given: Record<string, string>) => {
+      Object.assign(state, { outputs: {}, annotations: [], summary: '', failed: [] });
+      return action(workspace, given);
+    };
+
+    const unchanged = await fresh(inputs('.github/workflows/other.yml'));
+    expect(unchanged.outputs['required-impact']).toBe('none');
+    expect(unchanged.outputs['impact-ok']).toBe('true');
+    expect(unchanged.failed).toEqual([]);
+    expect(unchanged.summary).toContain(
+      '<sub>Only within `.github/workflows/other.yml`: graded `.github/workflows/other.yml`</sub>',
+    );
+
+    const renamed = await fresh(inputs('.github/workflows/ci-reusable.yml'));
+    expect(renamed.outputs['required-impact']).toBe('major');
+    expect(renamed.outputs['impact-ok']).toBe('false');
+    expect(renamed.failed).toHaveLength(1);
+
+    const removed = await fresh(inputs('.github/workflows/gone.yml'));
+    expect(removed.outputs['required-impact']).toBe('major');
+    expect(removed.outputs['exit-code']).toBe('1');
+    expect(removed.annotations.map((a) => String(a.props?.title ?? '').split(' ')[0])).toEqual(['FP810']);
+    expect(removed.annotations[0]?.message).toContain('was removed or moved');
+
+    const report = join(temp, 'impact.json');
+    await fresh({ ...inputs('.github/workflows/other.yml'), 'report-json': report });
+    expect(JSON.parse(readFileSync(report, 'utf8')).impact.scope).toEqual({
+      paths: ['.github/workflows/other.yml'],
+      units: ['.github/workflows/other.yml'],
+    });
+    // Without impact mode, the removed path is just missing.
+    const lint = await fresh({ paths: '.github/workflows/gone.yml' });
+    expect(lint.failed[0]).toContain('paths not found');
+    expect(lint.outputs['exit-code']).toBe('2');
+  });
+
+  it('reports the verdict within paths that hold nothing published, and skips paths that hold nothing at all', async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    // On main, two CI workflows that are not published; the branch deletes one of them.
+    g('checkout', '-q', 'main');
+    const ci = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{ run: "true" }]\n';
+    writeFileSync(join(workspace, '.github/workflows/ci.yml'), ci);
+    writeFileSync(join(workspace, '.github/workflows/old-ci.yml'), ci);
+    g('add', '-A');
+    g('commit', '-q', '-m', 'ci');
+    g('checkout', '-q', 'change');
+    g('merge', '-q', '--no-edit', 'main');
+    g('rm', '-q', '.github/workflows/old-ci.yml');
+    g('commit', '-q', '-m', 'old ci gone');
+    const fresh = (paths: string) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      return action(workspace, { impact: 'on', 'base-ref': 'main', 'expected-impact': 'major', paths });
+    };
+
+    // Before: FP812 annotated the root action.yml, which this repository does not have.
+    const unpublished = await fresh('.github/workflows/ci.yml');
+    expect(unpublished.outputs['required-impact']).toBe('none');
+    expect(unpublished.annotations.map((a) => [String(a.props?.title).split(' ')[0], a.props?.file])).toEqual(
+      [['FP812', '.github/workflows/ci.yml']],
+    );
+
+    const removed = await fresh('.github/workflows/old-ci.yml');
+    expect(removed.failed).toEqual([]);
+    expect(removed.outputs['exit-code']).toBe('0');
+    expect(removed.outputs['required-impact']).toBe('');
+    expect(removed.annotations).toEqual([]);
+    expect(removed.infos).toContain('impact: skipped (nothing within the paths to grade or to report on)');
+  });
+
+  it('does not fail on a path the change removed when impact mode is skipped', async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('checkout', '-q', 'main');
+    writeFileSync(
+      join(workspace, '.github/workflows/gone.yml'),
+      'on: workflow_call\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{ run: "true" }]\n',
+    );
+    g('add', '-A');
+    g('commit', '-q', '-m', 'gone');
+    g('checkout', '-q', 'change');
+    g('merge', '-q', '--no-edit', 'main');
+    g('rm', '-q', '.github/workflows/gone.yml');
+    g('commit', '-q', '-m', 'remove gone');
+    const fresh = (event: string, given: Record<string, string>) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      process.env.GITHUB_EVENT_NAME = event;
+      return action(workspace, { paths: '.github/workflows/gone.yml', ...given });
+    };
+
+    // Before: "paths not found" failed the step in the merge queue and on push, after the pull request passed.
+    for (const [event, given] of [
+      ['merge_group', { impact: 'auto', 'base-ref': 'main' }],
+      ['merge_group', { impact: 'on', 'base-ref': 'main' }],
+      ['push', { impact: 'auto' }],
+    ] as const) {
+      const s = await fresh(event, given);
+      expect(s.failed).toEqual([]);
+      expect(s.outputs['exit-code']).toBe('0');
+      expect(s.annotations.map((a) => [a.level, a.message])).toEqual([
+        [
+          'warning',
+          'paths not found under .: .github/workflows/gone.yml. Not refused while impact mode is skipped, as the change may have removed them.',
+        ],
+      ]);
+    }
+    // Where no pull request's run with the baseline comes first, a failure as in 0.14. Before: a warning, exit-code 0.
+    for (const [event, given] of [
+      ['pull_request_target', { impact: 'auto' }],
+      ['schedule', { impact: 'auto' }],
+      ['workflow_dispatch', { impact: 'auto' }],
+      ['workflow_dispatch', { impact: 'on', 'base-ref': 'change' }],
+    ] as const) {
+      const s = await fresh(event, given);
+      expect(s.failed).toEqual(['paths not found under .: .github/workflows/gone.yml']);
+      expect(s.outputs['exit-code']).toBe('2');
+      expect(s.annotations).toEqual([]);
+    }
+    // Without impact mode, still a failure.
+    expect((await fresh('push', {})).failed[0]).toContain('paths not found');
+  });
+
+  it('does not fail on a removed unit whose directory keeps other files when impact mode is skipped', async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('checkout', '-q', 'main');
+    mkdirSync(join(workspace, 'actions/old'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'actions/old/action.yml'),
+      'name: old\ndescription: d\nruns:\n  using: composite\n  steps: [{ shell: bash, run: "true" }]\n',
+    );
+    writeFileSync(join(workspace, 'actions/old/README.md'), '# old\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'old');
+    g('checkout', '-q', 'change');
+    g('merge', '-q', '--no-edit', 'main');
+    g('rm', '-q', 'actions/old/action.yml');
+    g('commit', '-q', '-m', 'remove old, keep its README');
+    const fresh = (event: string, given: Record<string, string>) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      process.env.GITHUB_EVENT_NAME = event;
+      return action(workspace, { paths: 'actions/old', ...given });
+    };
+
+    // Before: "None of the paths is a workflow … or an action" failed the step in the merge queue and on push.
+    for (const [event, given] of [
+      ['merge_group', { impact: 'auto', 'base-ref': 'main' }],
+      ['merge_group', { impact: 'on', 'base-ref': 'main' }],
+      ['push', { impact: 'auto' }],
+    ] as const) {
+      const s = await fresh(event, given);
+      expect(s.failed).toEqual([]);
+      expect(s.outputs['exit-code']).toBe('0');
+      expect(s.annotations.map((a) => [a.level, a.message])).toEqual([
+        [
+          'warning',
+          'paths without a workflow or action under .: actions/old. Not refused while impact mode is skipped, as the change may have removed them.',
+        ],
+      ]);
+    }
+    // Where no pull request's run with the baseline comes first, a failure as in 0.14. Before: a warning, exit-code 0.
+    for (const event of ['pull_request_target', 'schedule']) {
+      const s = await fresh(event, { impact: 'auto' });
+      expect(s.failed[0]).toContain('None of the paths is a workflow');
+      expect(s.outputs['exit-code']).toBe('2');
+    }
+    // Beside a path that names a workflow, actions/old was never refused, so there is nothing to warn about.
+    const beside = await fresh('merge_group', {
+      impact: 'auto',
+      'base-ref': 'main',
+      paths: 'actions/old .github/workflows/ci-reusable.yml',
+    });
+    expect(beside.failed).toEqual([]);
+    expect(beside.annotations.filter((a) => a.level === 'warning')).toEqual([]);
+    // Without impact mode, still a failure.
+    expect((await fresh('push', {})).failed[0]).toContain('None of the paths is a workflow');
+  });
+
+  it('refuses a path that never existed on a pull request in a repository that publishes nothing', async () => {
+    const workspace = mkdtempSync(join(temp, 'nopub-'));
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@example.com');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    const ci = (run: string) =>
+      `on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{ run: "${run}" }]\n`;
+    mkdirSync(join(workspace, '.github/workflows'), { recursive: true });
+    writeFileSync(join(workspace, '.github/workflows/ci.yml'), ci('true'));
+    writeFileSync(join(workspace, '.github/workflows/old.yml'), ci('true'));
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'change');
+    writeFileSync(join(workspace, '.github/workflows/ci.yml'), ci('false'));
+    g('rm', '-q', '.github/workflows/old.yml');
+    g('commit', '-q', '-am', 'change');
+    const fresh = (paths: string) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      return action(workspace, { impact: 'auto', 'base-ref': 'main', paths });
+    };
+
+    // Before: a warning, exit-code 0 and nothing linted; impact: auto had dropped the baseline that tells them apart.
+    const typo = await fresh('.github/workflows/typo.yml');
+    expect(typo.failed).toEqual(['paths not found under .: .github/workflows/typo.yml']);
+    expect(typo.outputs['exit-code']).toBe('2');
+    // A path the change removed is still accepted, and nothing within the paths is published.
+    const removed = await fresh('.github/workflows/old.yml');
+    expect(removed.failed).toEqual([]);
+    expect(removed.outputs['exit-code']).toBe('0');
+    expect(removed.annotations).toEqual([]);
+    expect(removed.infos).toContain(
+      'impact: skipped (no published workflow or action within the paths; see impact.publish)',
+    );
+    // Without paths, as before.
+    expect((await fresh('')).infos).toContain(
+      'impact: no published workflows or actions (see impact.publish)',
+    );
+  });
+
+  it("reads ignore from the baseline, so a pull request's own ignore edit does not change the impact outputs", async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    // The branch that renames the reusable workflow's check also ignores the workflow.
+    mkdirSync(join(workspace, '.github/flowpact'), { recursive: true });
+    writeFileSync(
+      join(workspace, '.github/flowpact/flowpact.config.yml'),
+      'ignore: [".github/workflows/ci-reusable.yml"]\n',
+    );
+    g('add', '-A');
+    g('commit', '-q', '-m', 'ignore it');
+    const s = await action(workspace, { impact: 'on', 'base-ref': 'main', 'expected-impact': 'patch' });
+    // Before: required-impact none and impact-ok true; 0.14 said major and false, but passed the step.
+    expect(s.outputs['required-impact']).toBe('major');
+    expect(s.outputs['impact-ok']).toBe('false');
+    expect(s.outputs['exit-code']).toBe('1');
+    expect(s.annotations.map((a) => String(a.props?.title).split(' ')[0])).toEqual(['FP810']);
+    expect(s.infos).toContain(
+      'impact: this pull request changes what ignore leaves out of impact mode (.github/workflows/ci-reusable.yml); that applies after it is merged',
+    );
+  });
+
+  it('treats every published unit ignored like nothing published, and reports the verdict on a file ignore leaves in', async () => {
+    const workspace = mkdtempSync(join(temp, 'ignored-'));
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@example.com');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    const actionYml = (input: string) =>
+      `name: a\ndescription: d\ninputs:\n${input}runs:\n  using: composite\n  steps: [{ shell: bash, run: "true" }]\n`;
+    const files: Record<string, string> = {
+      '.github/flowpact/flowpact.config.yml':
+        'ignore: ["*/action.yml"]\nimpact:\n  publish: ["*/action.yml"]\n',
+      'a/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      'b/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      '.github/workflows/ci.yml':
+        'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./a\n',
+    };
+    for (const [f, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(workspace, f)), { recursive: true });
+      writeFileSync(join(workspace, f), text);
+    }
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'change');
+    writeFileSync(join(workspace, 'b/action.yml'), actionYml(''));
+    g('commit', '-q', '-am', 'break b');
+    const fresh = (given: Record<string, string>) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      return action(workspace, { 'base-ref': 'main', 'expected-impact': 'major', ...given });
+    };
+
+    // Before: auto ran, graded nothing and annotated FP812 on action.yml, which this repository does not have.
+    const auto = await fresh({ impact: 'auto' });
+    expect(auto.infos).toContain(
+      "impact: the baseline's and the pull request's ignore leave out every published workflow and action (a/action.yml, b/action.yml); see ignore",
+    );
+    expect(auto.annotations).toEqual([]);
+    expect(auto.outputs['required-impact']).toBe('');
+    // impact: on runs: nothing is graded, and the verdict goes on a workflow ignore leaves in.
+    const on = await fresh({ impact: 'on' });
+    expect(on.outputs['required-impact']).toBe('none');
+    expect(on.annotations.map((a) => [String(a.props?.title).split(' ')[0], a.props?.file])).toEqual([
+      ['FP812', '.github/workflows/ci.yml'],
+    ]);
+    // With paths, auto says it was ignore that left the unit out.
+    const within = await fresh({ impact: 'auto', paths: 'b' });
+    expect(within.infos).toContain(
+      'impact: skipped (every published workflow or action within the paths is ignored; see ignore)',
+    );
+    expect(within.annotations).toEqual([]);
+    // impact: on with those paths runs where a file within them is left in, and is skipped where none is.
+    const beside = await fresh({ impact: 'on', paths: 'b .github/workflows/ci.yml' });
+    expect(beside.outputs['required-impact']).toBe('none');
+    expect(beside.annotations.map((a) => [String(a.props?.title).split(' ')[0], a.props?.file])).toEqual([
+      ['FP812', '.github/workflows/ci.yml'],
+    ]);
+    const only = await fresh({ impact: 'on', paths: 'b' });
+    expect(only.infos).toContain(
+      'impact: skipped (every workflow and action within the paths is ignored: nothing to grade or to report on)',
+    );
+    expect(only.outputs['required-impact']).toBe('');
+    expect(only.annotations).toEqual([]);
+  });
+
+  it('runs impact: auto on a pull request that takes the published units out of ignore, and fails it like 0.14', async () => {
+    const workspace = mkdtempSync(join(temp, 'unignored-'));
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@example.com');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    const actionYml = (input: string) =>
+      `name: a\ndescription: d\ninputs:\n${input}runs:\n  using: composite\n  steps: [{ shell: bash, run: "true" }]\n`;
+    const config = '.github/flowpact/flowpact.config.yml';
+    const files: Record<string, string> = {
+      [config]: 'ignore: ["*/action.yml"]\nimpact:\n  publish: ["*/action.yml"]\n',
+      'a/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      'b/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      '.github/workflows/ci.yml':
+        'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./a\n',
+    };
+    for (const [f, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(workspace, f)), { recursive: true });
+      writeFileSync(join(workspace, f), text);
+    }
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'change');
+    writeFileSync(join(workspace, config), 'impact:\n  publish: ["*/action.yml"]\n');
+    writeFileSync(join(workspace, 'b/action.yml'), actionYml(''));
+    g('commit', '-q', '-am', 'take a and b out of ignore, break b');
+    const s = await action(workspace, { impact: 'auto', 'base-ref': 'main', 'expected-impact': 'patch' });
+    // Before: "every published workflow and action is ignored (see ignore)", and the step passed.
+    expect(s.infos.filter((i) => i.includes('ignore'))).toEqual([]);
+    expect(s.outputs['required-impact']).toBe('major');
+    expect(s.outputs['impact-ok']).toBe('false');
+    expect(s.outputs['exit-code']).toBe('1');
+    const verdict = s.annotations.filter((a) => String(a.props?.title).startsWith('FP81'));
+    expect(verdict.map((a) => [String(a.props?.title).split(' ')[0], a.props?.file])).toEqual([
+      ['FP810', 'b/action.yml'],
+    ]);
+  });
+
+  it("reads the baseline's version of a base-config file of the repository for the baseline's ignore", async () => {
+    const workspace = mkdtempSync(join(temp, 'org-base-'));
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@example.com');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    const actionYml = (input: string) =>
+      `name: a\ndescription: d\ninputs:\n${input}runs:\n  using: composite\n  steps: [{ shell: bash, run: "true" }]\n`;
+    const files: Record<string, string> = {
+      '.github/flowpact/flowpact.config.yml': 'impact:\n  publish: ["*/action.yml"]\n',
+      '.github/org-base.yml': 'ignore: ["b/**"]\n',
+      'a/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      'b/action.yml': actionYml('  token: { description: t, required: false }\n'),
+    };
+    for (const [f, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(workspace, f)), { recursive: true });
+      writeFileSync(join(workspace, f), text);
+    }
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'change');
+    writeFileSync(join(workspace, 'b/action.yml'), actionYml(''));
+    g('commit', '-q', '-am', 'break b, which the base config ignores');
+    const s = await action(workspace, {
+      impact: 'on',
+      'base-ref': 'main',
+      'expected-impact': 'patch',
+      'base-config': join(workspace, '.github/org-base.yml'),
+    });
+    // Before: "this pull request changes what ignore leaves out of impact mode (b)", and FP810 failed the step.
+    expect(s.infos.filter((i) => i.includes('changes what ignore'))).toEqual([]);
+    expect(s.outputs['required-impact']).toBe('none');
+    expect(s.outputs['exit-code']).toBe('0');
+    expect(s.failed).toEqual([]);
+  });
+
+  it('uses a base-config file of the workspace that the checked-out commit does not track on both sides', async () => {
+    // The organization's config checked out into a gitignored directory of the workspace.
+    const workspace = mkdtempSync(join(temp, 'org-checkout-'));
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@example.com');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    const actionYml = (input: string) =>
+      `name: a\ndescription: d\ninputs:\n${input}runs:\n  using: composite\n  steps: [{ shell: bash, run: "true" }]\n`;
+    const files: Record<string, string> = {
+      '.github/flowpact/flowpact.config.yml': 'impact:\n  publish: ["*/action.yml"]\n',
+      '.gitignore': '.org/\n',
+      'a/action.yml': actionYml('  token: { description: t, required: false }\n'),
+      'b/action.yml': actionYml('  token: { description: t, required: false }\n'),
+    };
+    for (const [f, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(workspace, f)), { recursive: true });
+      writeFileSync(join(workspace, f), text);
+    }
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'change');
+    writeFileSync(join(workspace, 'b/action.yml'), actionYml(''));
+    g('commit', '-q', '-am', 'break b, which the base config ignores');
+    mkdirSync(join(workspace, '.org'));
+    writeFileSync(join(workspace, '.org/base.yml'), 'ignore: ["b/**"]\n');
+    const s = await action(workspace, {
+      impact: 'on',
+      'base-ref': 'main',
+      'expected-impact': 'patch',
+      'base-config': join(workspace, '.org/base.yml'),
+    });
+    // Before: "this pull request changes what ignore leaves out of impact mode (b)", and FP810 failed the step.
+    expect(
+      s.infos.filter((i) => i.includes('ignore leaves out') || i.includes('file of this repository')),
+    ).toEqual([]);
+    expect(s.outputs['required-impact']).toBe('none');
+    expect(s.outputs['exit-code']).toBe('0');
+    expect(s.failed).toEqual([]);
+  });
+
+  it('skips impact: auto when nothing within the paths is published', async () => {
+    const workspace = renamedRepo();
+    const g = (...args: string[]) => execFileSync('git', args, { cwd: workspace, stdio: 'pipe' });
+    g('checkout', '-q', 'main');
+    writeFileSync(
+      join(workspace, '.github/workflows/ci.yml'),
+      'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{ run: "true" }]\n',
+    );
+    g('add', '-A');
+    g('commit', '-q', '-m', 'ci');
+    g('checkout', '-q', 'change');
+    g('merge', '-q', '--no-edit', 'main');
+    const fresh = (given: Record<string, string>) => {
+      Object.assign(state, { outputs: {}, annotations: [], infos: [], summary: '', failed: [] });
+      return action(workspace, { impact: 'auto', 'base-ref': 'main', ...given });
+    };
+
+    // Before: the repository publishes ci-reusable.yml, so auto ran and annotated an FP813 about nothing.
+    const ci = await fresh({ paths: '.github/workflows/ci.yml' });
+    expect(ci.infos).toContain(
+      'impact: skipped (no published workflow or action within the paths; see impact.publish)',
+    );
+    expect(ci.annotations).toEqual([]);
+    expect(ci.outputs['required-impact']).toBe('');
+    expect(ci.summary).not.toContain('### Impact');
+    // A published unit within the paths, or no paths: it runs.
+    expect((await fresh({ paths: '.github/workflows' })).outputs['required-impact']).toBe('major');
+    expect((await fresh({})).outputs['required-impact']).toBe('major');
+    // impact: on still reports the verdict within the paths.
+    expect(
+      (await fresh({ impact: 'on', paths: '.github/workflows/ci.yml' })).outputs['required-impact'],
+    ).toBe('none');
+  });
+
   it('opens the impact baseline group only when something is logged in it', async () => {
     const off = await action(renamedRepo(), { impact: 'off' });
     expect(off.groups).not.toContain('flowpact: impact baseline');

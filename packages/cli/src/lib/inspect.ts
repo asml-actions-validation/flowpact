@@ -1,19 +1,39 @@
 /** `graph`, `trace`, `rules` and `explain`: what flowpact knows about a repository and its rules. */
 import { didYouMean, resolveSymbols, type TraceDirection, type TraceNode, trace } from '@ciatlas/core';
 import { analyze, type RuleCategory, resolveSeverities, type SeveritySetting } from '@flowpact/lint';
-import { buildCallGraph, type CallGraph } from '@flowpact/reporters';
+import { buildCallGraph, type CallGraph, reachableGraph } from '@flowpact/reporters';
 import { attempt, NoSymbolMatchError, usage } from './errors';
-import { bool, loadRegistry, type Session } from './session';
-import { checkNotEmpty } from './targets';
+import { analyzeSession, bool, loadRegistry, type Session, stringList } from './session';
+import { checkNotEmpty, checkTargets } from './targets';
 
-/** Which workflows call which reusable workflows and local actions. */
-export async function callGraph(session: Session): Promise<CallGraph> {
+export interface GraphOptions {
+  /**
+   * Workflow and action files or directories, relative to the root: draw only them and what they call and use.
+   * Default: all.
+   */
+  paths?: string[];
+}
+
+/** Which workflows call which reusable workflows and local actions; with paths, from those workflows and actions. */
+export async function callGraph(session: Session, options: GraphOptions = {}): Promise<CallGraph> {
+  const paths = stringList('paths', options.paths) ?? [];
   const { root, loaded, logger } = session;
   const result = attempt(() =>
-    analyze({ root, config: loaded.config, logger, validateSchema: false, only: [] }),
+    analyze({ root, config: loaded.config, logger, validateSchema: false, only: [], paths }),
   );
+  checkTargets(result.project, paths, root);
   checkNotEmpty(result.summary, root);
-  const graph = buildCallGraph(result.index);
+  const { targets } = result.project;
+  const whole = buildCallGraph(result.index);
+  const graph = targets.size
+    ? reachableGraph(
+        whole,
+        result.index
+          .units()
+          .filter((u) => targets.has(u.file))
+          .map((u) => u.path),
+      )
+    : whole;
   logger.debug('call graph', { nodes: graph.nodes.length, edges: graph.edges.length });
   return graph;
 }
@@ -43,21 +63,7 @@ export async function traceSymbol(session: Session, options: TraceOptions): Prom
   const depth = options.depth ?? 12;
   if (!Number.isInteger(depth) || depth < 1)
     throw usage(`depth must be a positive integer (got ${JSON.stringify(depth)})`);
-  const { root, loaded, logger } = session;
-  const registry = await loadRegistry(session);
-  const analysis = attempt(() =>
-    analyze({
-      root,
-      config: loaded.config,
-      ...(loaded.file ? { configFile: loaded.file } : {}),
-      ...(loaded.text !== undefined ? { configText: loaded.text } : {}),
-      ...(loaded.overrideLocs ? { overrideLocs: loaded.overrideLocs } : {}),
-      logger,
-      registry,
-      validateSchema: false,
-      only: [],
-    }),
-  );
+  const analysis = await analyzeSession(session, { validateSchema: false, only: [] });
   const direction: TraceDirection = bool('up', options.up) ? 'up' : 'down';
   const matches = resolveSymbols(analysis.index, query);
   if (matches.length === 0) {

@@ -4,6 +4,7 @@ import {
   buildCallGraph,
   edgeLabel,
   type RenderOptions,
+  reachableGraph,
   renderDot,
   renderGraphTree,
   renderMermaid,
@@ -67,6 +68,52 @@ describe('buildCallGraph', () => {
 
   it('is deterministic', () => {
     expect(JSON.stringify(graphOf('deep-nesting'))).toBe(JSON.stringify(graphOf('deep-nesting')));
+  });
+});
+
+describe('reachableGraph', () => {
+  it('keeps the roots and what they reach, through cycles, remote and missing targets, in order', () => {
+    const deep = graphOf('deep-nesting');
+    const fromBuild = reachableGraph(deep, ['.github/workflows/build.yml']);
+    expect(fromBuild.nodes.map((n) => n.id)).toEqual([
+      '.github/workflows/build.yml',
+      '.github/workflows/package.yml',
+      '.github/workflows/publish.yml',
+    ]);
+    expect(fromBuild.edges.map((e) => `${e.from} -> ${e.to}`)).toEqual([
+      '.github/workflows/build.yml -> .github/workflows/package.yml',
+      '.github/workflows/package.yml -> .github/workflows/publish.yml',
+    ]);
+    expect(fromBuild.roots).toEqual(['.github/workflows/build.yml']);
+    expect(reachableGraph(deep, ['.github/workflows/publish.yml'])).toEqual({
+      nodes: [deep.nodes.find((n) => n.id === '.github/workflows/publish.yml')],
+      edges: [],
+      roots: ['.github/workflows/publish.yml'],
+    });
+    const ids = deep.nodes.map((n) => n.id);
+    expect(reachableGraph(deep, [...ids].reverse())).toEqual({ ...deep, roots: ids });
+
+    const cycles = graphOf('cycles');
+    const fromC = reachableGraph(cycles, ['.github/workflows/c.yml']);
+    expect(fromC.nodes.map((n) => n.id)).toEqual(['.github/workflows/b.yml', '.github/workflows/c.yml']);
+    expect(fromC.edges.map((e) => `${e.from} -> ${e.to}`)).toEqual([
+      '.github/workflows/b.yml -> .github/workflows/c.yml',
+      '.github/workflows/c.yml -> .github/workflows/b.yml',
+    ]);
+    expect(reachableGraph(cycles, ['.github/workflows/main.yml'])).toEqual({
+      ...cycles,
+      roots: ['.github/workflows/main.yml'],
+    });
+  });
+
+  it('starts the tree at a given workflow even when it is in a cycle', () => {
+    // Before: C and B call each other, so neither was an entry point and the tree started at B, the first node.
+    const tree = renderGraphTree(reachableGraph(graphOf('cycles'), ['.github/workflows/c.yml']), plain);
+    expect(tree.split('\n')).toEqual([
+      'C (.github/workflows/c.yml) · on: workflow_call',
+      '└── jobs.back → B (.github/workflows/b.yml)',
+      '    └── jobs.next → C (.github/workflows/c.yml) ↻ cycle',
+    ]);
   });
 });
 

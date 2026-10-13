@@ -15,7 +15,7 @@ import {
   type WorkflowDecl,
   workflowChecks,
 } from '@ciatlas/core';
-import { buildContract, diffContracts } from './contracts';
+import { buildContract, diffContracts, pathHolds } from './contracts';
 
 export const IMPACT_LEVELS = ['none', 'patch', 'minor', 'major'] as const;
 export type ImpactLevel = (typeof IMPACT_LEVELS)[number];
@@ -459,17 +459,30 @@ function newUnits(
 
 /**
  * Every graded change to a published unit between `base` and `head`. `headExists` tells whether a unit's file is still
- * in the working tree (a unit can exist without being loaded, e.g. an action nothing here uses any more).
+ * in the working tree (a unit can exist without being loaded, e.g. an action nothing here uses any more). With `units`,
+ * only the units of those paths are graded.
  */
 export function impactChanges(
   base: ProjectIndex,
   head: ProjectIndex,
   policy: Pick<ImpactPolicy, 'publish'>,
   headExists: (file: string) => boolean = () => false,
+  units?: ReadonlySet<string>,
 ): ImpactChange[] {
   const out: ImpactChange[] = [];
-  const baseUnits = new Map(base.units().map((u) => [u.path, u]));
-  const headUnits = new Map(head.units().map((u) => [u.path, u]));
+  const graded = (u: UnitDecl) => !units || units.has(u.path);
+  const baseUnits = new Map(
+    base
+      .units()
+      .filter(graded)
+      .map((u) => [u.path, u]),
+  );
+  const headUnits = new Map(
+    head
+      .units()
+      .filter(graded)
+      .map((u) => [u.path, u]),
+  );
   for (const [path, b] of baseUnits) {
     if (!isPublished(b, policy)) continue;
     const h = headUnits.get(path);
@@ -603,28 +616,185 @@ export function impactVerdict(
   };
 }
 
+/**
+ * Paths that narrow impact mode to the published units within them, as `lint`, `check` and `impact` were given them.
+ */
+export interface ImpactPaths {
+  /** Each path as given, and relative to the root with `/` separators. */
+  paths: { given: string; relative: string }[];
+  /** The workflow and action files of the working tree the paths name (the project's targets). */
+  targets: ReadonlySet<string>;
+}
+
+/** What paths narrowed impact mode to. */
+export interface ImpactScope {
+  /** The paths, relative to the root. */
+  paths: string[];
+  /** The published units within them, in the baseline or the working tree: the only units graded. */
+  units: string[];
+}
+
+/** What paths or `ignore` left out of impact mode, when they leave out anything. */
+export interface ImpactNarrowed {
+  /**
+   * The published units (within the paths) that `ignore` leaves out, so they are not graded: both the baseline's and the
+   * pull request's match each file of them within the paths.
+   */
+  ignored: string[];
+  /**
+   * Where findings about the verdict go when no change is there to place them on: the first published file graded in
+   * the working tree, else the first workflow or action file of the working tree (within the paths) that `ignore` does
+   * not leave out. Absent when there is neither, say paths that hold only what the change removed, none of it
+   * published, or an `ignore` that matches every workflow and action: there is nothing to report on.
+   */
+  anchor?: string;
+}
+
+/** What impact mode looks at: every unit, or with paths those within them; never one that `ignore` leaves out. */
+export interface ImpactLookAt {
+  /** Paths that narrow impact mode to the units within them. */
+  within?: ImpactPaths;
+  /**
+   * The `ignore` patterns of the baseline's config and of the pull request's (the working tree's). A unit whose file
+   * both match is not graded, so neither adding a published unit to `ignore` nor taking it out in the pull request lets
+   * its change through. Without them, every unit is graded.
+   */
+  ignore?: { baseline: readonly string[]; head: readonly string[] };
+}
+
+const matchesAny = (patterns: readonly string[], file: string) =>
+  patterns.some((p) => matchesPattern(file, p));
+
+/** Whether a file is within the paths; every file is without them. */
+const coveredBy = (within: ImpactPaths | undefined) => (file: string) =>
+  !within || within.targets.has(file) || within.paths.some((p) => pathHolds(p.relative, file));
+
+/** Whether impact mode leaves a file out: both the baseline's and the pull request's `ignore` match it. */
+const leftOutBy = (ignore: ImpactLookAt['ignore']) => (file: string) =>
+  ignore !== undefined && matchesAny(ignore.baseline, file) && matchesAny(ignore.head, file);
+
+/**
+ * The units of either side impact mode looks at, by path; undefined when it looks at every unit (no paths, and an
+ * `ignore` that leaves out none).
+ */
+function unitsLookedAt(base: ProjectIndex, head: ProjectIndex, { within, ignore }: ImpactLookAt) {
+  if (!within && !ignore) return undefined;
+  const covered = coveredBy(within);
+  const leftOut = leftOutBy(ignore);
+  const units = [...base.units(), ...head.units()];
+  const looked = units.filter((u) => covered(u.file) && !leftOut(u.file));
+  return within || looked.length < units.length ? new Set(looked.map((u) => u.path)) : undefined;
+}
+
+/**
+ * The published units (within the paths) that only the pull request's own `ignore` matches: graded until it is merged,
+ * left out after.
+ */
+function ignoreAddedOf(
+  base: ProjectIndex,
+  head: ProjectIndex,
+  policy: Pick<ImpactPolicy, 'publish'>,
+  { within, ignore }: ImpactLookAt,
+): string[] {
+  if (!ignore) return [];
+  const covered = coveredBy(within);
+  const added = [...base.units(), ...head.units()].filter(
+    (u) =>
+      isPublished(u, policy) &&
+      covered(u.file) &&
+      matchesAny(ignore.head, u.file) &&
+      !matchesAny(ignore.baseline, u.file),
+  );
+  return [...new Set(added.map((u) => u.path))].sort();
+}
+
+/** The file of the working tree to place findings about the verdict on, when no change is there (see `anchor`). */
+function anchorOf(head: ProjectIndex, { within, ignore }: ImpactLookAt, published: UnitDecl[]) {
+  const headFiles = head.units().map((u) => u.file);
+  const graded = published.map((u) => u.file).filter((f) => headFiles.includes(f));
+  const leftOut = leftOutBy(ignore);
+  const others = (within ? [...within.targets] : headFiles).filter((f) => !leftOut(f));
+  return graded.sort()[0] ?? others.sort()[0];
+}
+
+/**
+ * What paths or `ignore` left out, given the units impact mode looks at (`units`, by path) and the published ones among
+ * them. A unit with a file `ignore` leaves out is graded all the same when another file of it is looked at (after a move
+ * `ignore` does not follow, from `action.yml` to `action.yaml`), so it is not named as left out.
+ */
+function narrowedOf(
+  base: ProjectIndex,
+  head: ProjectIndex,
+  policy: Pick<ImpactPolicy, 'publish'>,
+  lookAt: ImpactLookAt,
+  graded: { units: ReadonlySet<string>; published: UnitDecl[] },
+): ImpactNarrowed {
+  const covered = coveredBy(lookAt.within);
+  const leftOut = leftOutBy(lookAt.ignore);
+  const ignored = [...base.units(), ...head.units()].filter(
+    (u) => isPublished(u, policy) && covered(u.file) && leftOut(u.file) && !graded.units.has(u.path),
+  );
+  const anchor = anchorOf(head, lookAt, graded.published);
+  return { ignored: [...new Set(ignored.map((u) => u.path))].sort(), ...(anchor ? { anchor } : {}) };
+}
+
+/** What the paths narrowed impact mode to, given the published units within them. */
+function scopeOf(within: ImpactPaths, published: UnitDecl[]): ImpactScope {
+  return {
+    paths: [...new Set(within.paths.map((p) => p.relative))],
+    units: [...new Set(published.map((u) => u.path))].sort(),
+  };
+}
+
 /** Impact mode's result: where the baseline came from, every graded change and the verdict. */
 export interface ImpactResult {
   baseline: { kind: 'ref' | 'release'; ref: string; commit: string };
   changes: ImpactChange[];
   verdict: ImpactVerdict;
   policy: ImpactPolicy;
-  /** Files of the published units (base and head), e.g. to place findings that are not about one change. */
+  /**
+   * Files of the published units (base and head) that were graded, e.g. to place findings that are not about one
+   * change.
+   */
   publishedFiles: string[];
+  /** With paths: what they narrowed impact mode to. Without, every published unit is graded. */
+  scope?: ImpactScope;
+  /** When paths or `ignore` leave out units: which published ones `ignore` does, and where to report the verdict. */
+  narrowed?: ImpactNarrowed;
+  /**
+   * The published units that only the pull request's own `ignore` matches (see `ImpactLookAt.ignore`): graded until it
+   * is merged, left out after.
+   */
+  ignoreAdded?: string[];
 }
 
-/** Grades the changes and judges the declaration in one step. */
+/**
+ * Grades the changes and judges the declaration in one step. Only the published units impact mode looks at count (with
+ * paths, those within them; never one that `ignore` leaves out), so the verdict is about those units alone.
+ */
 export function computeImpact(
   base: ProjectIndex,
   head: ProjectIndex,
   baseline: ImpactResult['baseline'],
   declared: DeclaredInput,
   policy: ImpactPolicy,
-  headExists?: (file: string) => boolean,
+  lookAt: ImpactLookAt = {},
 ): ImpactResult {
-  const changes = impactChanges(base, head, policy, headExists);
-  const publishedFiles = [
-    ...new Set([...head.units(), ...base.units()].filter((u) => isPublished(u, policy)).map((u) => u.file)),
-  ].sort();
-  return { baseline, changes, verdict: impactVerdict(changes, declared, policy), policy, publishedFiles };
+  const { within } = lookAt;
+  const units = unitsLookedAt(base, head, lookAt);
+  const changes = impactChanges(base, head, policy, undefined, units);
+  const published = [...head.units(), ...base.units()].filter(
+    (u) => isPublished(u, policy) && (!units || units.has(u.path)),
+  );
+  const ignoreAdded = ignoreAddedOf(base, head, policy, lookAt);
+  return {
+    baseline,
+    changes,
+    verdict: impactVerdict(changes, declared, policy),
+    policy,
+    publishedFiles: [...new Set(published.map((u) => u.file))].sort(),
+    ...(within ? { scope: scopeOf(within, published) } : {}),
+    ...(units ? { narrowed: narrowedOf(base, head, policy, lookAt, { units, published }) } : {}),
+    ...(ignoreAdded.length ? { ignoreAdded } : {}),
+  };
 }

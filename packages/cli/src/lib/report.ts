@@ -4,9 +4,9 @@ import { neutralizeWorkflowCommands } from '@ciatlas/core';
 import {
   type AnalysisResult,
   type AnalyzeOptions,
-  analyze,
   contractPatch,
   exitCodeFor,
+  followsPullRequest,
   githubEvent,
   IMPACT_CODES,
   type ImpactLevel,
@@ -25,8 +25,8 @@ import {
   renderSarif,
 } from '@flowpact/reporters';
 import { attempt, usage } from './errors';
-import { bool, loadRegistry, oneOf, type Session, stringList } from './session';
-import { checkNotEmpty, checkTargets } from './targets';
+import { analyzeSession, bool, oneOf, type Session, stringList } from './session';
+import { checkNotEmpty, checkTargets, removedElsewhere } from './targets';
 import { renderOptions, type TextOptions } from './text';
 
 export type ReportCommand = 'lint' | 'check' | 'impact';
@@ -48,7 +48,10 @@ export interface ImpactFlags {
 }
 
 export interface ReportOptions extends ImpactFlags {
-  /** Workflow and action files or directories to report on, relative to the root. Default: all. */
+  /**
+   * Workflow and action files or directories to report on, relative to the root; impact mode judges only the published
+   * ones within them. Default: all.
+   */
   paths?: string[];
   /** Rule codes or names to run. */
   only?: string[];
@@ -68,7 +71,10 @@ export interface PrettyOptions extends TextOptions {
 export interface Analysis {
   /** The JSON report (schema v1): what `--format json` prints, parsed. */
   readonly report: JsonReport;
-  /** What the CLI prints as `impact: …` lines: impact mode skipped, or notes about its baseline. */
+  /**
+   * What the CLI prints as `impact: …` lines: impact mode skipped, notes about its baseline and how it graded, and the
+   * paths it does not refuse though they name no workflow or action.
+   */
   readonly notes: string[];
   /** The comparison with the locked contracts (`check` only). */
   readonly contracts?: { drift: boolean; breaking: number; patch(): string | undefined };
@@ -87,29 +93,39 @@ export interface Analysis {
 /** Where the CLI prints, in order, what the API returns in `notes`. */
 export interface ReportHooks {
   /**
-   * Impact mode is skipped (on `merge_group`). Returning true stops before the analysis, and `runReport` returns
-   * undefined.
+   * Impact mode is skipped: on `merge_group`, before the analysis, or after it when the paths hold nothing to grade or
+   * report on. Returning true stops there, and `runReport` returns undefined.
    */
   impactSkipped?(reason: string): boolean;
-  /** The analysis ran, before its paths are checked; `notes` are impact mode's notes about its baseline. */
+  /**
+   * The analysis ran, before its paths are checked; `notes` are impact mode's notes about its baseline and how it
+   * graded, and about the paths it does not refuse though they name no workflow or action of the working tree.
+   */
   analyzed?(notes: string[]): void;
+  /**
+   * Where else a path the working tree lacks may be meant (the CLI: relative to the working directory). Impact mode
+   * takes it from there when the baseline has a workflow or action within it there and not under the root.
+   */
+  elsewhere?(path: string): string | undefined;
 }
 
 /** The baseline and the declaration for impact mode; read from the pull request when running in GitHub Actions. */
-function setupImpact(session: Session, flags: ImpactFlags): PreparedImpact {
+function setupImpact(session: Session, flags: ImpactFlags, paths: string[]): PreparedImpact {
   const { root, loaded, logger } = session;
   return attempt(() =>
     prepareImpact(
       root,
       loaded.config,
       {
+        ...(paths.length ? { paths } : {}),
         ...(flags.base ? { base: flags.base } : {}),
         ...(flags.expect ? { expect: flags.expect } : {}),
         ...(flags.title !== undefined ? { title: flags.title } : {}),
         ...(flags.labels !== undefined ? { labels: flags.labels } : {}),
         ...(process.env.GITHUB_ACTIONS === 'true' ? { event: githubEvent() } : {}),
         ...(loaded.file ? { configPath: loaded.file } : {}),
-        // A base config that is a file of the repository stays out of the baseline (core decides from its path).
+        // A base config the pull request's commits can change stays out of the baseline's impact settings (impact mode
+        // asks git whether the checked-out commit, or a submodule of it, holds the file).
         ...(loaded.base
           ? { baseConfig: loaded.base.data, baseConfigFile: resolve(process.cwd(), loaded.base.file) }
           : {}),
@@ -124,16 +140,54 @@ function impactFor(
   session: Session,
   command: ReportCommand,
   options: ReportOptions,
-  expect: ImpactLevel | undefined,
-  labels: string[] | undefined,
+  declared: { expect: ImpactLevel | undefined; labels: string[] | undefined },
+  paths: string[],
 ): PreparedImpact | undefined {
   if (command !== 'impact' && !bool('impact', options.impact)) return undefined;
-  return setupImpact(session, {
-    ...(options.base !== undefined ? { base: options.base } : {}),
-    ...(expect ? { expect } : {}),
-    ...(options.title !== undefined ? { title: options.title } : {}),
-    ...(labels ? { labels } : {}),
-  });
+  const { expect, labels } = declared;
+  return setupImpact(
+    session,
+    {
+      ...(options.base !== undefined ? { base: options.base } : {}),
+      ...(expect ? { expect } : {}),
+      ...(options.title !== undefined ? { title: options.title } : {}),
+      ...(labels ? { labels } : {}),
+    },
+    paths,
+  );
+}
+
+/** Whether this run usually follows a pull request's run, which has the baseline (`merge_group`, `push` in Actions). */
+const afterPullRequest = () =>
+  process.env.GITHUB_ACTIONS === 'true' && followsPullRequest(process.env.GITHUB_EVENT_NAME);
+
+/**
+ * The paths that name no workflow or action of the working tree yet are not refused, and notes about them: in impact
+ * mode, what the change removed; when impact mode was asked for but skipped on `merge_group` or `push`, every such path
+ * that would be refused (one the working tree lacks, or one that holds no workflow or action, such as a removed
+ * action's directory that keeps its README), since without a baseline a path the change removed cannot be told from a
+ * mistake, and a pull request's run, which has one, usually came first (a new branch's first push comes before any).
+ * Anywhere else, a skipped impact mode refuses them.
+ */
+function unrefused(
+  result: AnalysisResult,
+  impact: PreparedImpact | undefined,
+): { paths: string[]; notes: string[] } {
+  if (!impact || !('skip' in impact) || !afterPullRequest())
+    return { paths: result.removedPaths ?? [], notes: [] };
+  const { missingTargets: missing = [], ignoredTargets = [], targets, wholeRepository } = result.project;
+  // Beside a path that names a workflow or action, one that holds none is not refused anyway.
+  const empty = targets.size || wholeRepository ? [] : ignoredTargets;
+  const note = (what: string, paths: string[]) =>
+    paths.length
+      ? [
+          `impact: ${what}, not refused while impact mode is skipped (the change may have removed them): ${paths.join(', ')}`,
+        ]
+      : [];
+  return {
+    paths: [...missing, ...empty],
+    notes: [...note('paths not found', missing), ...note('paths without a workflow or action', empty)],
+  };
 }
 
 /** The rules to run: as `--only` says; impact mode alone runs the impact rules. */
@@ -152,12 +206,43 @@ function commandOptions(
 ): Partial<AnalyzeOptions> {
   return {
     ...(options.now ? { now: options.now } : {}),
-    paths: command === 'impact' ? [] : paths,
+    paths,
     validateSchema: command === 'impact' ? false : bool('schema', options.schema) !== false,
     checkContracts: command === 'check',
     ...onlyRules(command, only),
     ...(impact && 'options' in impact ? { impact: impact.options } : {}),
   };
+}
+
+/** The options `runReport` checks before it runs: paths, rules, labels, the declared impact and the clock. */
+function reportInputs(options: ReportOptions) {
+  if (options.now !== undefined && !(options.now instanceof Date)) throw usage('now must be a Date');
+  return {
+    given: stringList('paths', options.paths) ?? [],
+    only: stringList('only', options.only),
+    labels: stringList('labels', options.labels),
+    expect: oneOf('expect', options.expect, IMPACT_LEVELS),
+  };
+}
+
+/** Notes that impact mode is skipped; true when a hook stops the run there. */
+function skipped(reason: string, notes: string[], hooks: ReportHooks): boolean {
+  notes.push(`impact: skipped (${reason})`);
+  return hooks.impactSkipped?.(reason) === true;
+}
+
+/**
+ * Impact mode's notes once the analysis ran: about its baseline, about how it graded, and about the paths it does not
+ * refuse.
+ */
+function analyzedNotes(
+  impact: PreparedImpact | undefined,
+  result: AnalysisResult,
+  unrefusedNotes: string[],
+): string[] {
+  return [...(impact && 'notes' in impact ? impact.notes : []), ...(result.impactNotes ?? [])]
+    .map((n) => `impact: ${n}`)
+    .concat(unrefusedNotes);
 }
 
 /** Runs `lint`, `check` or `impact`; undefined only when a hook stopped it. */
@@ -167,37 +252,26 @@ export async function runReport(
   options: ReportOptions = {},
   hooks: ReportHooks = {},
 ): Promise<Analysis | undefined> {
-  // `impact` analyzes the whole repository; paths given anyway are refused below, as for `lint`.
-  const paths = stringList('paths', options.paths) ?? [];
-  const only = stringList('only', options.only);
-  const labels = stringList('labels', options.labels);
-  const expect = oneOf('expect', options.expect, IMPACT_LEVELS);
-  if (options.now !== undefined && !(options.now instanceof Date)) throw usage('now must be a Date');
-  const { root, loaded, logger } = session;
+  const { given, only, labels, expect } = reportInputs(options);
+  const { root } = session;
   const notes: string[] = [];
-  const impact = impactFor(session, command, options, expect, labels);
-  if (impact && 'skip' in impact) {
-    notes.push(`impact: skipped (${impact.skip})`);
-    if (hooks.impactSkipped?.(impact.skip)) return undefined;
-  }
-  const registry = await loadRegistry(session);
-  const result: AnalysisResult = attempt(() =>
-    analyze({
-      root,
-      config: loaded.config,
-      ...(loaded.file ? { configFile: loaded.file } : {}),
-      ...(loaded.text !== undefined ? { configText: loaded.text } : {}),
-      ...(loaded.overrideLocs ? { overrideLocs: loaded.overrideLocs } : {}),
-      logger,
-      registry,
-      ...commandOptions(command, options, paths, only, impact),
-    }),
+  const impact = impactFor(session, command, options, { expect, labels }, given);
+  if (impact && 'skip' in impact && skipped(impact.skip, notes, hooks)) return undefined;
+  const paths = removedElsewhere(
+    given,
+    impact && 'options' in impact ? impact.options.base : undefined,
+    root,
+    hooks.elsewhere,
   );
-  const baseline = impact && 'notes' in impact ? impact.notes.map((n) => `impact: ${n}`) : [];
-  notes.push(...baseline);
-  hooks.analyzed?.(baseline);
-  checkTargets(result.project, paths, root);
+  const result = await analyzeSession(session, commandOptions(command, options, paths, only, impact));
+  // In impact mode, a path the change removed (one that names a workflow or action of the baseline) is not missing.
+  const accepted = unrefused(result, impact);
+  const analyzed = analyzedNotes(impact, result, accepted.notes);
+  notes.push(...analyzed);
+  hooks.analyzed?.(analyzed);
+  checkTargets(result.project, paths, root, accepted.paths);
   if (command !== 'impact') checkNotEmpty(result.summary, root);
+  if (result.impactSkipped && skipped(result.impactSkipped, notes, hooks)) return undefined;
   return analysisOf(result, notes);
 }
 

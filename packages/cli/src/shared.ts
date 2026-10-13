@@ -366,8 +366,8 @@ export async function guard(fn: () => Promise<number> | number): Promise<void> {
 export class UsageError extends Error {}
 
 /**
- * Positional paths of `lint`, `check` and `generate`. They are relative to --root; a path that only exists relative to
- * the working directory is taken from there.
+ * Positional paths of `lint`, `check`, `impact`, `generate` and `graph`. They are relative to --root; a path that only
+ * exists relative to the working directory is taken from there.
  */
 export function pathArgs(positionals: string[], command: string, root: string): string[] {
   return positionals
@@ -377,4 +377,14 @@ export function pathArgs(positionals: string[], command: string, root: string): 
         ? p
         : resolve(process.cwd(), p),
     );
+}
+
+/**
+ * Where a path that exists nowhere would be relative to the working directory, when that differs from --root: impact
+ * mode takes a path the change removed from there when the baseline had it there.
+ */
+export function cwdPath(path: string, root: string): string | undefined {
+  if (isAbsolute(path)) return undefined;
+  const there = resolve(process.cwd(), path);
+  return there === resolve(root, path) ? undefined : there;
 }

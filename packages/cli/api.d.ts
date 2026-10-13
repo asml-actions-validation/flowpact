@@ -75,7 +75,10 @@ export interface ImpactModeOptions {
 }
 
 export interface LintOptions extends CommonOptions, PluginOptions, ImpactModeOptions {
-  /** Workflow and action files or directories to report on, relative to the root. Default: all. */
+  /**
+   * Workflow and action files or directories to report on, relative to the root. Default: all. With `impact`, impact
+   * mode grades only the published workflows and actions within them.
+   */
   paths?: string[];
   /** Run only these rules (codes or names). */
   only?: string[];
@@ -90,6 +93,12 @@ export interface LintOptions extends CommonOptions, PluginOptions, ImpactModeOpt
 export interface CheckOptions extends LintOptions {}
 
 export interface ImpactOptions extends CommonOptions, PluginOptions, ImpactModeOptions {
+  /**
+   * Workflow and action files or directories, relative to the root: grade only the published ones within them, so the
+   * verdict is about those alone. A path the change removed counts when the baseline has a workflow or action there.
+   * Default: every published workflow and action.
+   */
+  paths?: string[];
   /** Run only these rules. Default: the impact rules. */
   only?: string[];
   /** The current time, for the expiry of overrides. Default: now. */
@@ -105,7 +114,10 @@ export interface GenerateOptions extends CommonOptions, PluginOptions {
   out?: string;
 }
 
-export interface GraphOptions extends CommonOptions {}
+export interface GraphOptions extends CommonOptions {
+  /** Workflow and action files or directories, relative to the root: only them and what they call and use. Default: all. */
+  paths?: string[];
+}
 
 export interface TraceOptions extends CommonOptions, PluginOptions {
   /** e.g. `pipeline.yml#inputs.config`, `pipeline.yml:config`, or `pipeline.yml` for its whole interface. */
@@ -198,6 +210,21 @@ export interface ImpactVerdict {
     message: string;
     loc: Loc;
   }[];
+  /**
+   * Only when paths were given: impact mode graded only the published units within them, and the verdict is about
+   * those alone.
+   */
+  scope?: {
+    /** The paths given, relative to the root. */
+    paths: string[];
+    /** The published workflows and actions within them, in the baseline or the working tree: the only ones graded. */
+    units: string[];
+  };
+  /**
+   * Only when `ignore` left out published workflows or actions (within the paths): those units, which were not graded,
+   * as both the baseline's and the pull request's `ignore` match them.
+   */
+  ignored?: string[];
 }
 
 /** The JSON report, schema v1: what `flowpact lint --format json` prints. */
@@ -314,7 +341,10 @@ export type FailOn = 'error' | 'warning' | 'never';
 export interface Analysis {
   /** The JSON report: what `--format json` prints, parsed. */
   readonly report: Report;
-  /** What the CLI prints as `impact: …` lines: impact mode skipped, or notes about its baseline. */
+  /**
+   * What the CLI prints as `impact: …` lines: impact mode skipped, notes about its baseline and how it graded, and the
+   * paths it does not refuse though they name no workflow or action.
+   */
   readonly notes: string[];
   /** `check` only: the comparison with the locked contracts. */
   readonly contracts?: {
@@ -389,6 +419,11 @@ export interface CallGraph {
     /** The called workflow has no `on.workflow_call`. */
     notReusable?: boolean;
   }[];
+  /**
+   * With `paths`: the workflows and actions they name, where the graph starts. The tree starts from them even when
+   * something in the graph calls them, as in a cycle.
+   */
+  roots?: string[];
 }
 
 export type SymbolKind =
@@ -543,7 +578,9 @@ export declare function check(options?: CheckOptions): Promise<Analysis>;
 
 /**
  * `flowpact impact`: checks that the declared release impact covers the changes to published workflows and actions.
- * On `merge_group` impact mode is skipped (see `notes`), and the analysis reports nothing.
+ * When impact mode is skipped (on `merge_group`, or when there is nothing to grade or to report on: paths that hold
+ * only what the change removed, or an `ignore` that matches every workflow and action), `notes` says why, and the
+ * analysis reports nothing.
  */
 export declare function impact(options?: ImpactOptions): Promise<Analysis>;
 
@@ -711,6 +748,8 @@ export interface RuleContext {
     baseline: ImpactVerdict['baseline'];
     changes: ImpactVerdict['changes'];
     verdict: { required: ImpactLevel; declared?: ImpactVerdict['declared']; ok: boolean };
+    /** With paths: the only units graded, so `changes` and `verdict` are about them alone. */
+    scope?: ImpactVerdict['scope'];
   };
   /** How each override was used; only for `post` rules. */
   readonly overrides?: {

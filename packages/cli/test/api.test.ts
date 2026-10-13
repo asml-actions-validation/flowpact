@@ -311,6 +311,27 @@ describe('generate', () => {
 });
 
 describe('graph, trace, rules and explain', () => {
+  it('draws only the given workflows and actions and what they call, as the CLI does', async () => {
+    const deep = fixture('deep-nesting');
+    const r = await api<{ build: unknown; text: string; notAList: { kind: string; message: string } }>(`
+      const root = ${JSON.stringify(deep)};
+      const build = await flowpact.graph({ root, paths: ['.github/workflows/build.yml'] });
+      out({
+        build,
+        text: flowpact.formatGraph(build),
+        notAList: await failure(flowpact.graph({ root, paths: '.github/workflows/build.yml' })),
+      });`);
+    const cliJson = await cli(['graph', '.github/workflows/build.yml', '--root', deep, '--format', 'json']);
+    expect(r.build).toEqual(JSON.parse(cliJson.stdout));
+    expect((r.build as { nodes: { id: string }[] }).nodes.map((n) => n.id)).toEqual([
+      '.github/workflows/build.yml',
+      '.github/workflows/package.yml',
+      '.github/workflows/publish.yml',
+    ]);
+    expect(r.text).toBe((await cli(['graph', '.github/workflows/build.yml', '--root', deep])).stdout);
+    expect(r.notAList).toMatchObject({ kind: 'usage', message: 'paths must be an array of strings' });
+  });
+
   it('return what the CLI prints as JSON', async () => {
     const deep = fixture('deep-nesting');
     const incident = fixture('incident-matrix');
@@ -586,6 +607,51 @@ describe('impact', () => {
       findings: 0,
     });
   });
+
+  it('grades only the published units within paths, in impact() and lint({ impact })', async () => {
+    const root = renamed();
+    write(root, {
+      '.github/workflows/ci.yml': 'on: push\njobs:\n  t:\n    runs-on: x\n    steps: [{ run: x }]\n',
+    });
+    type Run = { impact: { required: string; ok: boolean; scope?: unknown }; exit: number };
+    const r = await api<Record<'ci' | 'reusable' | 'lint' | 'all', Run>>(`
+      const root = ${JSON.stringify(root)};
+      const of = (a) => ({ impact: a.impact, exit: a.exitCode() });
+      out({
+        ci: of(await flowpact.impact({ root, base: 'main', expect: 'patch', paths: ['.github/workflows/ci.yml'] })),
+        reusable: of(await flowpact.impact({ root, base: 'main', expect: 'patch', paths: ['.github/workflows/ci-reusable.yml'] })),
+        lint: of(await flowpact.lint({ root, impact: true, base: 'main', expect: 'patch', paths: ['.github/workflows/ci.yml'] })),
+        all: of(await flowpact.impact({ root, base: 'main', expect: 'patch' })),
+      });`);
+    expect(r.ci).toEqual({
+      impact: expect.objectContaining({
+        required: 'none',
+        ok: true,
+        scope: { paths: ['.github/workflows/ci.yml'], units: [] },
+      }),
+      exit: 0,
+    });
+    expect(r.reusable).toMatchObject({
+      impact: { required: 'major', ok: false, scope: { units: ['.github/workflows/ci-reusable.yml'] } },
+      exit: 1,
+    });
+    expect(r.lint).toMatchObject({ impact: { required: 'none', ok: true }, exit: 0 });
+    expect(r.all).toMatchObject({ impact: { required: 'major', ok: false }, exit: 1 });
+    expect(r.all.impact.scope).toBeUndefined();
+    const cliReport = await cli([
+      'impact',
+      '.github/workflows/ci.yml',
+      '--root',
+      root,
+      '--base',
+      'main',
+      '--expect',
+      'patch',
+      '--format',
+      'json',
+    ]);
+    expect(r.ci.impact).toEqual(JSON.parse(cliReport.stdout).impact);
+  });
 });
 
 describe('plugins and base config', () => {
@@ -809,9 +875,11 @@ const outputs: string[] = [a.json({ includeGraph: true }), a.sarif(), a.markdown
   a.pretty({ color: false, width: 80, ascii: true, hideInfo: true })];
 const patch: string | undefined = (await check()).contracts?.patch();
 const required = (await impact({ base: 'main', expect: 'patch', title: 'fix: x', labels: ['a'] })).impact?.required;
+const graded: string[] | undefined = (await impact({ paths: ['actions/deploy'] })).impact?.scope?.units;
 const written: string[] = (await generate({ dryRun: true, out: 'x' })).written;
 const preview: boolean = (await generate({ dryRun: true })).dryRun;
 const nodes = (await graph()).nodes.map((n) => n.kind);
+const drawn = (await graph({ paths: ['.github/workflows/ci.yml'] })).edges.length;
 const traced = (await trace({ symbol: 'ci.yml#inputs.x', up: true, depth: 2 })).traces[0]?.children;
 const listed = (await rules({ repositoryPlugins: false })).map((r) => r.severity);
 const why: string = (await explain('FP401', { root: '.' })).why;
@@ -859,7 +927,7 @@ a.exitCode('sometimes');
 // @ts-expect-error: the report is read-only
 a.report = report;
 
-export { VERSION, code, outputs, patch, required, written, nodes, traced, listed, why, rule, where, severity, annotations, texts, unit, preview };
+export { VERSION, code, outputs, patch, required, graded, written, nodes, drawn, traced, listed, why, rule, where, severity, annotations, texts, unit, preview };
 `,
     });
     const tsc = join(dirname(require.resolve('typescript/package.json')), 'bin/tsc');
