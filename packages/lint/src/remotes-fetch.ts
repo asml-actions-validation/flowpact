@@ -14,7 +14,14 @@ import {
   remoteKey,
   trimChar,
 } from '@ciatlas/core';
-import { lockEntryOf, type RemoteEntry, type RemoteRef, type RemotesLock, remoteRefsOf } from './remotes';
+import {
+  lockEntryOf,
+  type RemoteEntry,
+  type RemoteRef,
+  type RemotesLock,
+  remoteRefsOf,
+  targetedUnits,
+} from './remotes';
 
 export interface FetchRemotesOptions {
   /** Sent only to `apiUrl`, never logged. Public repositories can be read without one, at a low rate limit. */
@@ -25,6 +32,18 @@ export interface FetchRemotesOptions {
   fetch?: typeof fetch;
   /** Requests at a time. */
   concurrency?: number;
+  /** Called as each reference is done, for a progress display or a log line. */
+  onProgress?: (p: FetchProgress) => void;
+}
+
+/** One reference done: how many of how many, and what came of it (its commit, or why it could not be fetched). */
+export interface FetchProgress {
+  done: number;
+  total: number;
+  ref: string;
+  outcome: 'fetched' | 'unreadable' | 'failed';
+  /** The commit it resolved to, or why it could not be fetched. */
+  detail: string;
 }
 
 export interface RemotesUpdate {
@@ -54,19 +73,58 @@ class FetchError extends Error {
 
 /** A GET on the GitHub API, as text: `accept` picks the media type (a commit's SHA, a file's raw content). */
 async function get(url: string, accept: string, opts: FetchRemotesOptions): Promise<string | undefined> {
-  const res = await (opts.fetch ?? fetch)(url, {
-    headers: {
-      accept,
-      'user-agent': 'flowpact',
-      'x-github-api-version': '2022-11-28',
-      ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-    },
-    signal: AbortSignal.timeout(30_000),
-  });
+  let res: Response;
+  try {
+    res = await (opts.fetch ?? fetch)(url, {
+      headers: {
+        accept,
+        'user-agent': 'flowpact',
+        'x-github-api-version': '2022-11-28',
+        ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw networkError(url, e);
+  }
   // 422: a SHA that is no commit of the repository.
   if (res.status === 404 || res.status === 422) return undefined;
-  if (!res.ok) throw new FetchError(`${res.status} ${res.statusText || 'error'} from the GitHub API`);
+  if (!res.ok) throw httpError(res, opts);
   return bodyOf(res);
+}
+
+const TIMEOUT_MS = 30_000;
+
+/** Why a request did not get an answer, and what to check: Node's fetch only says `fetch failed`. */
+function networkError(url: string, e: unknown): FetchError {
+  const host = new URL(url).origin;
+  if ((e as Error).name === 'TimeoutError')
+    return new FetchError(
+      `no answer from ${host} within ${TIMEOUT_MS / 1000} s: check the network, or try again`,
+    );
+  const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+  const why = cause?.code ?? cause?.message ?? (e as Error).message;
+  return new FetchError(
+    `could not reach ${host} (${why}): check the network and GITHUB_API_URL; behind a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1`,
+  );
+}
+
+/** Why the GitHub API refused a request, and what to do about it. */
+function httpError(res: Response, opts: FetchRemotesOptions): FetchError {
+  const status = `${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+  if (res.status === 401)
+    return new FetchError(
+      `the GitHub API rejected the token (${status}): check GH_TOKEN or GITHUB_TOKEN, or run \`gh auth status\``,
+    );
+  if ((res.status === 403 || res.status === 429) && res.headers.get('x-ratelimit-remaining') === '0')
+    return new FetchError(
+      `the GitHub API rate limit is used up (${status})${opts.token ? '; try again later' : ': without a token it allows 60 requests an hour; set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`'}`,
+    );
+  if (res.status === 403)
+    return new FetchError(
+      `the GitHub API refused the request (${status}): the token needs read access to the repository's contents`,
+    );
+  return new FetchError(`${status} from the GitHub API`);
 }
 
 /** A response's text, refused over `MAX_FILE_BYTES` by its length header or by what it holds. */
@@ -128,7 +186,18 @@ async function eachLimited<T>(items: T[], limit: number, work: (item: T) => Prom
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** A value as JSON with every map's keys sorted: an entry read back from the lockfile has its keys in schema order. */
+function sortedJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(sortedJson).join(',')}]`;
+  if (v && typeof v === 'object')
+    return `{${Object.keys(v)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${sortedJson((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  return JSON.stringify(v) ?? 'null';
+}
+
+const same = (a: unknown, b: unknown) => sortedJson(a) === sortedJson(b);
 
 type Problems = Pick<RemotesUpdate, 'failed' | 'unreadable'>;
 
@@ -154,6 +223,31 @@ async function tryFetch(
   }
 }
 
+/** `tryFetch`, then `onProgress` with the outcome; `count.done` counts the references finished so far. */
+async function fetchCounted(
+  r: RemoteRef,
+  opts: FetchRemotesOptions,
+  out: Problems,
+  count: { done: number; total: number },
+): Promise<RemoteEntry | undefined> {
+  const entry = await tryFetch(r, opts, out);
+  count.done++;
+  if (opts.onProgress) opts.onProgress({ ...count, ref: r.raw, ...outcomeOf(r.raw, entry, out) });
+  return entry;
+}
+
+/** What came of fetching a reference: its commit, or why it could not be fetched. */
+function outcomeOf(
+  ref: string,
+  entry: RemoteEntry | undefined,
+  out: Problems,
+): Pick<FetchProgress, 'outcome' | 'detail'> {
+  if (entry) return { outcome: 'fetched', detail: entry.sha };
+  const unreadable = out.unreadable.find((p) => p.ref === ref);
+  if (unreadable) return { outcome: 'unreadable', detail: unreadable.error };
+  return { outcome: 'failed', detail: out.failed.find((p) => p.ref === ref)?.error ?? '' };
+}
+
 const byRef = (a: { ref: string }, b: { ref: string }) => (a.ref < b.ref ? -1 : 1);
 
 /**
@@ -165,7 +259,8 @@ export async function updateRemotesLock(
   previous: RemotesLock | undefined,
   opts: FetchRemotesOptions = {},
 ): Promise<RemotesUpdate> {
-  const refs = remoteRefsOf(index);
+  const scope = targetedUnits(index);
+  const refs = remoteRefsOf(index, scope);
   const before = new Map(Object.entries(previous?.remotes ?? {}).map(([ref, e]) => [remoteKey(ref), e]));
   const remotes: RemotesLock['remotes'] = {};
   const out: RemotesUpdate = {
@@ -176,23 +271,43 @@ export async function updateRemotesLock(
     failed: [],
     unreadable: [],
   };
+  const count = { done: 0, total: refs.length };
   await eachLimited(refs, opts.concurrency ?? 8, async (r) => {
     const old = before.get(remoteKey(r.raw));
-    const entry = await tryFetch(r, opts, out);
+    const entry = await fetchCounted(r, opts, out, count);
     if (entry) remotes[r.raw] = entry;
     else if (old) remotes[r.raw] = old;
     if (entry && !old) out.added.push(r.raw);
     else if (entry && !same(old, entry)) out.changed.push(r.raw);
   });
-  const used = new Set(refs.map((r) => remoteKey(r.raw)));
+  // An entry is dropped only when nothing in the repository uses it; with paths, the others are kept as they were.
+  const used = new Set(remoteRefsOf(index).map((r) => remoteKey(r.raw)));
+  if (scope) keepOutside(previous, used, new Set(refs.map((r) => remoteKey(r.raw))), out);
   out.removed = Object.keys(previous?.remotes ?? {}).filter((ref) => !used.has(remoteKey(ref)));
   for (const list of [out.added, out.changed, out.removed]) list.sort();
   out.failed.sort(byRef);
   out.unreadable.sort(byRef);
   // A reference without an entry that cannot be read is recorded, so the lockfile accounts for it (see FP612).
   const unreadable = out.unreadable.filter((u) => !remotes[u.ref]);
-  if (unreadable.length) out.lock.unreadable = Object.fromEntries(unreadable.map((u) => [u.ref, u.error]));
+  if (unreadable.length)
+    out.lock.unreadable = {
+      ...out.lock.unreadable,
+      ...Object.fromEntries(unreadable.map((u) => [u.ref, u.error])),
+    };
   return out;
+}
+
+/** With paths: the previous entries (and unreadable references) of references used outside them, kept as they were. */
+function keepOutside(
+  previous: RemotesLock | undefined,
+  used: Set<string>,
+  fetched: Set<string>,
+  out: RemotesUpdate,
+): void {
+  const outside = (ref: string) => used.has(remoteKey(ref)) && !fetched.has(remoteKey(ref));
+  for (const [ref, e] of Object.entries(previous?.remotes ?? {})) if (outside(ref)) out.lock.remotes[ref] = e;
+  const unreadable = Object.entries(previous?.unreadable ?? {}).filter(([ref]) => outside(ref));
+  if (unreadable.length) out.lock.unreadable = Object.fromEntries(unreadable);
 }
 
 export interface FetchedRemotes {
@@ -222,8 +337,9 @@ export async function fetchMissingRemotes(
   const locked = new Set(Object.keys(lock?.remotes ?? {}).map(remoteKey));
   const missing = remoteRefsOf(new Index(project)).filter((r) => !locked.has(remoteKey(r.raw)));
   const out: FetchedRemotes = { remotes: {}, failed: [], unreadable: [] };
+  const count = { done: 0, total: missing.length };
   await eachLimited(missing, opts.concurrency ?? 8, async (r) => {
-    const entry = await tryFetch(r, opts, out);
+    const entry = await fetchCounted(r, opts, out, count);
     if (entry) out.remotes[r.raw] = entry;
   });
   out.failed.sort(byRef);

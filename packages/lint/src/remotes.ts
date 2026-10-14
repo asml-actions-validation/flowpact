@@ -29,7 +29,8 @@ export const REMOTES_LOCK_FILES = [
 
 const inputSchema = z.strictObject({
   type: z.optional(z.string()),
-  required: z.boolean(),
+  /** Written only when true. */
+  required: z.optional(z.boolean()),
   default: z.optional(z.json()),
   options: z.optional(z.array(z.string())),
 });
@@ -39,7 +40,7 @@ const entrySchema = z.strictObject({
   sha: z.string().check(z.regex(/^[0-9a-f]{40}$/)),
   kind: z.enum(['workflow', 'action']),
   inputs: z.optional(z.record(z.string(), inputSchema)),
-  secrets: z.optional(z.record(z.string(), z.strictObject({ required: z.boolean() }))),
+  secrets: z.optional(z.record(z.string(), z.strictObject({ required: z.optional(z.boolean()) }))),
   outputs: z.optional(z.array(z.string())),
   /** An action's `runs.using`: only a composite action's outputs are all declared. */
   using: z.optional(z.string()),
@@ -159,13 +160,13 @@ export function parseRemoteRef(raw: string, kind: RemoteRef['kind']): RemoteRef 
 }
 
 /** The remote reusable workflows and actions a project uses, once each (by `remoteKey`), in the order they are met. */
-export function remoteRefsOf(index: ProjectIndex): RemoteRef[] {
+export function remoteRefsOf(index: ProjectIndex, units: Iterable<UnitDecl> = index.units()): RemoteRef[] {
   const out = new Map<string, RemoteRef>();
   const add = (raw: string, kind: RemoteRef['kind']) => {
     const ref = parseRemoteRef(raw, kind);
     if (ref && !out.has(remoteKey(raw))) out.set(remoteKey(raw), ref);
   };
-  for (const unit of index.units()) {
+  for (const unit of units) {
     if (unit.kind === 'workflow')
       for (const job of Object.values(unit.jobs))
         if (job.uses?.kind === 'remote-workflow') add(job.uses.raw, 'workflow');
@@ -175,10 +176,28 @@ export function remoteRefsOf(index: ProjectIndex): RemoteRef[] {
   return [...out.values()];
 }
 
+/**
+ * The units the requested paths name (`Project.targets`), and the local workflows and actions they reach; undefined
+ * when no paths were given, which is every unit.
+ */
+export function targetedUnits(index: ProjectIndex): Set<UnitDecl> | undefined {
+  const { targets } = index.project;
+  if (!targets.size) return undefined;
+  const out = new Set<UnitDecl>();
+  const visit = (unit: UnitDecl) => {
+    if (out.has(unit)) return;
+    out.add(unit);
+    for (const c of index.callSites) if (c.caller === unit) visit(c.callee);
+    for (const u of index.actionUses) if (u.unit === unit) visit(u.action);
+  };
+  for (const unit of index.units()) if (targets.has(unit.file)) visit(unit);
+  return out;
+}
+
 /** An input as the lockfile records it. */
 const lockedInput = (i: InputDecl) => ({
   ...(i.type ? { type: i.type } : {}),
-  required: i.required,
+  ...(i.required ? { required: true } : {}),
   ...(i.hasDefault && i.default !== undefined ? { default: i.default } : {}),
   ...(i.options ? { options: i.options } : {}),
 });
@@ -186,26 +205,42 @@ const lockedInput = (i: InputDecl) => ({
 const lockedInputs = (decls: Record<string, InputDecl>) =>
   Object.fromEntries(Object.values(decls).map((i) => [i.name, lockedInput(i)]));
 
-/** The lockfile entry of a remote unit, read from its file at commit `sha`. */
+/** `key: value` when the value holds something, so the lockfile leaves out empty maps and lists. */
+const ifAny = <K extends string, V extends object>(key: K, value: V): Partial<Record<K, V>> =>
+  Object.keys(value).length ? ({ [key]: value } as Record<K, V>) : {};
+
+/**
+ * The lockfile entry of a remote unit, read from its file at commit `sha`. What is the default is left out: `required`
+ * when false, and empty inputs, secrets and outputs.
+ */
 export function lockEntryOf(unit: UnitDecl, sha: string): RemoteEntry {
   if (unit.kind === 'workflow') {
     const call = unit.call;
     return {
       sha,
       kind: 'workflow',
-      inputs: lockedInputs(call?.inputs ?? {}),
-      secrets: Object.fromEntries(
-        Object.values(call?.secrets ?? {}).map((s) => [s.name, { required: s.required }]),
+      ...ifAny('inputs', lockedInputs(call?.inputs ?? {})),
+      ...ifAny(
+        'secrets',
+        Object.fromEntries(
+          Object.values(call?.secrets ?? {}).map((s) => [s.name, s.required ? { required: true } : {}]),
+        ),
       ),
-      outputs: Object.values(call?.outputs ?? {}).map((o) => o.name),
+      ...ifAny(
+        'outputs',
+        Object.values(call?.outputs ?? {}).map((o) => o.name),
+      ),
     };
   }
   return {
     sha,
     kind: 'action',
     ...(unit.using ? { using: unit.using } : {}),
-    inputs: lockedInputs(unit.inputs),
-    outputs: Object.values(unit.outputs).map((o) => o.name),
+    ...ifAny('inputs', lockedInputs(unit.inputs)),
+    ...ifAny(
+      'outputs',
+      Object.values(unit.outputs).map((o) => o.name),
+    ),
   };
 }
 

@@ -83,7 +83,7 @@ describe('updateRemotesLock', () => {
         kind: 'workflow',
         inputs: {
           env: { type: 'string', required: true },
-          level: { type: 'choice', required: false, default: 'low', options: ['low', 'high'] },
+          level: { type: 'choice', default: 'low', options: ['low', 'high'] },
         },
         secrets: { token: { required: true } },
         outputs: ['url'],
@@ -211,5 +211,123 @@ describe('unreadable references', () => {
     const findings = lint(files).findings.map((f) => f.code);
     expect(findings).not.toContain('FP612');
     expect(findings).not.toContain('FP611');
+  });
+});
+
+describe('updateRemotesLock with paths', () => {
+  const files = {
+    [`${WF}/a.yml`]: 'on: push\njobs:\n  c:\n    uses: ./.github/workflows/_inner.yml\n',
+    [`${WF}/_inner.yml`]:
+      'on: workflow_call\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: octo/setup@v2\n',
+    [`${WF}/b.yml`]: 'on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: octo/other@v1\n',
+  };
+  const api = fakeApi(
+    { 'octo/setup@v2': SHA('b'), 'octo/other@v1': SHA('c') },
+    {
+      [`octo/setup/action.yml@${SHA('b')}`]: SETUP,
+      [`octo/other/action.yml@${SHA('c')}`]: SETUP,
+    },
+  );
+  const previous: RemotesLock = {
+    version: 1,
+    remotes: {
+      'octo/other@v1': { sha: SHA('d'), kind: 'action', inputs: {}, outputs: [] },
+      'octo/unused@v1': { sha: SHA('e'), kind: 'action', inputs: {}, outputs: [] },
+    },
+    unreadable: { 'octo/private@v1': 'not readable' },
+  };
+
+  it('fetches only what the given workflows reach, keeps other entries, and drops only what nothing uses', async () => {
+    api.seen.length = 0;
+    const index = lint(files, { paths: [`${WF}/a.yml`] }).index;
+    const u = await updateRemotesLock(index, previous, { fetch: api.fetch });
+    // a.yml reaches octo/setup@v2 through _inner.yml; b.yml's octo/other@v1 is not fetched and keeps its entry.
+    expect(api.seen.map((r) => new URL(r.url).pathname)).not.toContain('/repos/octo/other/commits/v1');
+    expect(u.added).toEqual(['octo/setup@v2']);
+    expect(u.lock.remotes['octo/other@v1']!.sha).toBe(SHA('d'));
+    expect(u.removed).toEqual(['octo/unused@v1']);
+    expect(Object.keys(u.lock.remotes).sort()).toEqual(['octo/other@v1', 'octo/setup@v2']);
+    // octo/private@v1 is used nowhere: it goes with the rest.
+    expect(u.lock.unreadable).toBeUndefined();
+  });
+
+  it('keeps an unreadable reference used outside the paths', async () => {
+    const withPrivate = {
+      ...files,
+      [`${WF}/b.yml`]: `${files[`${WF}/b.yml`]}      - uses: octo/private@v1\n`,
+    };
+    const u = await updateRemotesLock(lint(withPrivate, { paths: [`${WF}/a.yml`] }).index, previous, {
+      fetch: api.fetch,
+    });
+    expect(u.lock.unreadable).toEqual({ 'octo/private@v1': 'not readable' });
+  });
+});
+
+describe('fetch errors say why and what to do, and progress is reported', () => {
+  const index = () =>
+    lint({
+      [`${WF}/ci.yml`]: 'on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: octo/setup@v2\n',
+    }).index;
+  const failing = (fail: () => Response | never) =>
+    (async () => fail()) as unknown as typeof globalThis.fetch;
+  const error = async (fail: () => Response | never, token?: string) =>
+    (await updateRemotesLock(index(), undefined, { fetch: failing(fail), ...(token ? { token } : {}) }))
+      .failed[0]?.error;
+
+  it('names the network error behind `fetch failed`, and a timeout', async () => {
+    const offline = () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    };
+    expect(await error(offline)).toBe(
+      'could not reach https://api.github.com (ENOTFOUND): check the network and GITHUB_API_URL; behind a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1',
+    );
+    const slow = () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    };
+    expect(await error(slow)).toBe(
+      'no answer from https://api.github.com within 30 s: check the network, or try again',
+    );
+  });
+
+  it('says what to do about a rejected token, a used-up rate limit and a refused request', async () => {
+    expect(await error(() => new Response('', { status: 401 }), 't')).toBe(
+      'the GitHub API rejected the token (401): check GH_TOKEN or GITHUB_TOKEN, or run `gh auth status`',
+    );
+    const limited = () => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0' } });
+    expect(await error(limited)).toBe(
+      'the GitHub API rate limit is used up (403): without a token it allows 60 requests an hour; set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`',
+    );
+    expect(await error(() => new Response('', { status: 403 }), 't')).toBe(
+      "the GitHub API refused the request (403): the token needs read access to the repository's contents",
+    );
+  });
+
+  it('reports progress for each reference as it is done', async () => {
+    const seen: string[] = [];
+    const api = fakeApi({ 'octo/setup@v2': SHA('b') }, { [`octo/setup/action.yml@${SHA('b')}`]: SETUP });
+    await updateRemotesLock(lint({ [`${WF}/ci.yml`]: caller }).index, undefined, {
+      fetch: api.fetch,
+      onProgress: (p) => seen.push(`${p.done}/${p.total} ${p.ref} ${p.outcome}`),
+    });
+    expect(seen).toHaveLength(3);
+    expect(seen.at(-1)).toMatch(/^3\/3 /);
+    expect(seen.some((line) => /^[123]\/3 octo\/setup@v2 fetched$/.test(line))).toBe(true);
+  });
+});
+
+describe('an unchanged entry read back from the lockfile', () => {
+  it('is not reported as changed, whatever the order of its keys', async () => {
+    const api = fakeApi({ 'octo/setup@v2': SHA('b') }, { [`octo/setup/action.yml@${SHA('b')}`]: SETUP });
+    const index = lint({
+      [`${WF}/ci.yml`]: 'on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: octo/setup@v2\n',
+    }).index;
+    const first = await updateRemotesLock(index, undefined, { fetch: api.fetch });
+    const files = { '.github/flowpact/remotes.lock.yaml': serializeRemotesLock(first.lock) };
+    const { readRemotesLock } = await import('@flowpact/lint');
+    const { memoryFileSystem } = await import('@ciatlas/core');
+    const again = await updateRemotesLock(index, readRemotesLock(memoryFileSystem(files)).lock, {
+      fetch: api.fetch,
+    });
+    expect(again).toMatchObject({ added: [], changed: [], removed: [] });
   });
 });
