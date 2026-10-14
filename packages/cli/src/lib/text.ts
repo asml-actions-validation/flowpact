@@ -3,7 +3,7 @@
  * construction. Every text is safe to print in a CI log: no line of it can be read as a GitHub workflow command (it
  * embeds names from the analyzed YAML), which is what the CLI's stdout also guarantees.
  */
-import { neutralizeWorkflowCommands } from '@ciatlas/core';
+import { escapeControl, neutralizeWorkflowCommands } from '@ciatlas/core';
 import {
   type CallGraph,
   finalize,
@@ -21,7 +21,13 @@ import pc from 'picocolors';
 import { usage } from './errors';
 import type { ContractGeneration } from './generate';
 import type { RuleDocs, RuleInfo, TraceResult } from './inspect';
-import { describeToken, type RemotesUpdateResult } from './remotes';
+import {
+  describeToken,
+  type RemotesCleanResult,
+  type RemotesDownloadResult,
+  type RemotesUpdateResult,
+  type SourcesKept,
+} from './remotes';
 import { oneOf } from './session';
 
 /** How text is rendered: what `--no-color`, `--ascii` and the terminal decide in the CLI. */
@@ -151,26 +157,86 @@ export function generationText(generation: ContractGeneration, opts: RenderOptio
   return safe(`${plan.endsWith('\n') ? plan : `${plan}\n`}${renderPatch(patch, opts)}`);
 }
 
+/**
+ * A reference, or a reason built from the lockfile, as printed: a pull request writes both, so control characters
+ * (an escape sequence that would rewrite the terminal) are shown, not sent.
+ */
+const shown = (s: string) => escapeControl(s);
+
 /** `remotes update`: what the lockfile gained, lost or changed, and what could not be fetched. */
 export function remotesText(r: RemotesUpdateResult, opts: RenderOptions): string {
   const c = opts.color ? pc : { bold: (s: string) => s, red: (s: string) => s, dim: (s: string) => s };
   const lines: string[] = [];
   const list = (label: string, refs: string[]) => {
-    for (const ref of refs) lines.push(`  ${label} ${ref}`);
+    for (const ref of refs) lines.push(`  ${label} ${shown(ref)}`);
   };
   list('new    ', r.added);
   list('changed', r.changed);
   list('removed', r.removed);
-  for (const u of r.unreadable) lines.push(`  ${c.dim('unread ')} ${u.ref}: ${u.error}`);
-  for (const f of r.failed) lines.push(`  ${c.red('failed ')} ${f.ref}: ${f.error}`);
+  for (const u of r.unreadable) lines.push(`  ${c.dim('unread ')} ${shown(u.ref)}: ${shown(u.error)}`);
+  for (const f of r.failed) lines.push(`  ${c.red('failed ')} ${shown(f.ref)}: ${shown(f.error)}`);
+  if ((r.failed.length || r.unreadable.length) && !r.tokenSource) lines.push(c.dim(NO_TOKEN));
+  return safe(`${[...updateHead(r, c), ...lines].join('\n')}\n`);
+}
+
+/** What `remotes update` wrote (or would), the token it used, and where it kept the files it read. */
+function updateHead(r: RemotesUpdateResult, c: { bold: (s: string) => string; dim: (s: string) => string }) {
   const verb = r.dryRun ? 'would write' : 'wrote';
-  lines.unshift(c.dim(`token: ${describeToken(r.tokenSource)}`));
-  lines.unshift(c.bold(r.changes ? `${verb} ${r.file}` : `${r.file} is up to date`));
-  if ((r.failed.length || r.unreadable.length) && !r.tokenSource)
-    lines.push(
-      c.dim(
-        '  No token was used: set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`. It needs read access to the contents of the private repositories.',
-      ),
-    );
+  return [
+    c.bold(r.changes ? `${verb} ${r.file}` : `${r.file} is up to date`),
+    c.dim(`token: ${describeToken(r.tokenSource)}`),
+    ...(r.sources ? [c.dim(sourcesLine(r.sources))] : []),
+    ...(r.sourcesNotKept ? [c.dim(`sources: ${r.sourcesNotKept}`)] : []),
+  ];
+}
+
+const NO_TOKEN =
+  '  No token was used: set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`. It needs read access to the contents of the private repositories.';
+
+/** Where `remotes update` kept the files it read, for the editor, and how many it could not keep, and why. */
+function sourcesLine(s: SourcesKept): string {
+  const counts = [
+    s.written || s.failed ? `${s.written} new` : undefined,
+    s.removed ? `${commits(s.removed)} removed` : undefined,
+    s.failed ? `${s.notKept} not kept: ${s.failed}` : undefined,
+  ].filter(Boolean);
+  return `sources: ${s.dir}${counts.length ? ` (${counts.join(', ')})` : ''}`;
+}
+
+const commits = (k: number) => `${k} old commit${k === 1 ? '' : 's'}`;
+
+const sources = (k: number) => `${k} source${k === 1 ? '' : 's'}`;
+
+/** What `remotes download` did, in a line: downloaded (of how many tried), or nothing to do. */
+function downloadHead(r: RemotesDownloadResult): string {
+  const tried = r.downloaded.length + r.failed.length;
+  if (r.failed.length) return `downloaded ${r.downloaded.length} of ${sources(tried)} to ${r.dir}`;
+  return r.downloaded.length
+    ? `downloaded ${sources(r.downloaded.length)} to ${r.dir}`
+    : `nothing to download to ${r.dir}`;
+}
+
+/** `remotes download`: what the cache now has, then each reference not downloaded, and why. */
+export function remotesDownloadText(r: RemotesDownloadResult, opts: RenderOptions): string {
+  const c = opts.color ? pc : { bold: (s: string) => s, red: (s: string) => s, dim: (s: string) => s };
+  const lines = [c.bold(downloadHead(r)), c.dim(`token: ${describeToken(r.tokenSource)}`)];
+  if (r.cached.length) lines.push(c.dim(`  ${sources(r.cached.length)} already there`));
+  if (r.removed) lines.push(c.dim(`  ${commits(r.removed)} removed`));
+  for (const ref of r.notLocked)
+    lines.push(`  ${c.dim('unlocked')} ${shown(ref)}: not in ${r.file}; \`flowpact remotes update\` adds it`);
+  for (const s of r.skipped) lines.push(`  ${c.dim('skipped ')} ${shown(s.ref)}: ${shown(s.reason)}`);
+  for (const f of r.failed) lines.push(`  ${c.red('failed  ')} ${shown(f.ref)}: ${shown(f.error)}`);
+  // A failure to write the cache is local: no token would help.
+  if (r.failed.some((f) => !f.cache) && !r.tokenSource) lines.push(c.dim(NO_TOKEN));
+  return safe(`${lines.join('\n')}\n`);
+}
+
+/** `remotes clean`: how many cached commits went, and what was kept. */
+export function remotesCleanText(r: RemotesCleanResult, opts: RenderOptions): string {
+  const c = opts.color ? pc : { bold: (s: string) => s, dim: (s: string) => s };
+  const n = `${r.removed} cached commit${r.removed === 1 ? '' : 's'}`;
+  const lines = [c.bold(r.removed ? `removed ${n} from ${r.dir}` : `nothing to remove in ${r.dir}`)];
+  if (r.keep) lines.push(c.dim(`kept the ${r.keep} most recently used of each repository`));
+  if (r.failed) lines.push(c.dim(`some could not be removed: ${r.failed}`));
   return safe(`${lines.join('\n')}\n`);
 }

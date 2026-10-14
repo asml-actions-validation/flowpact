@@ -8681,9 +8681,9 @@ var require_cronstrue = __commonJS({
 
 // src/main.ts
 import { execFileSync as execFileSync3 } from "child_process";
-import { mkdirSync as mkdirSync2, mkdtempSync, readFileSync as readFileSync5, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
+import { mkdirSync as mkdirSync3, mkdtempSync, readFileSync as readFileSync5, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "fs";
 import { tmpdir } from "os";
-import { dirname as dirname4, isAbsolute as isAbsolute7, join as join6, relative as relative7, resolve as resolve7, sep as sep4 } from "path";
+import { dirname as dirname5, isAbsolute as isAbsolute8, join as join7, relative as relative8, resolve as resolve8, sep as sep4 } from "path";
 import { fileURLToPath } from "url";
 
 // ../../node_modules/.pnpm/@actions+core@3.0.1/node_modules/@actions/core/lib/command.js
@@ -8883,11 +8883,11 @@ var ProxyAgent = class {
 // ../../node_modules/.pnpm/@actions+http-client@4.0.1/node_modules/@actions/http-client/lib/index.js
 var __awaiter = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve8) {
-      resolve8(value);
+    return value instanceof P ? value : new P(function(resolve9) {
+      resolve9(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve8, reject) {
+  return new (P || (P = Promise))(function(resolve9, reject) {
     function fulfilled(value) {
       try {
         step2(generator.next(value));
@@ -8903,7 +8903,7 @@ var __awaiter = function(thisArg, _arguments, P, generator) {
       }
     }
     function step2(result) {
-      result.done ? resolve8(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve9(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step2((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -8976,26 +8976,26 @@ var HttpClientResponse = class {
   }
   readBody() {
     return __awaiter(this, void 0, void 0, function* () {
-      return new Promise((resolve8) => __awaiter(this, void 0, void 0, function* () {
+      return new Promise((resolve9) => __awaiter(this, void 0, void 0, function* () {
         let output = Buffer.alloc(0);
         this.message.on("data", (chunk) => {
           output = Buffer.concat([output, chunk]);
         });
         this.message.on("end", () => {
-          resolve8(output.toString());
+          resolve9(output.toString());
         });
       }));
     });
   }
   readBodyBuffer() {
     return __awaiter(this, void 0, void 0, function* () {
-      return new Promise((resolve8) => __awaiter(this, void 0, void 0, function* () {
+      return new Promise((resolve9) => __awaiter(this, void 0, void 0, function* () {
         const chunks = [];
         this.message.on("data", (chunk) => {
           chunks.push(chunk);
         });
         this.message.on("end", () => {
-          resolve8(Buffer.concat(chunks));
+          resolve9(Buffer.concat(chunks));
         });
       }));
     });
@@ -9198,14 +9198,14 @@ var HttpClient = class {
    */
   requestRaw(info2, data) {
     return __awaiter(this, void 0, void 0, function* () {
-      return new Promise((resolve8, reject) => {
+      return new Promise((resolve9, reject) => {
         function callbackForResult(err, res) {
           if (err) {
             reject(err);
           } else if (!res) {
             reject(new Error("Unknown error"));
           } else {
-            resolve8(res);
+            resolve9(res);
           }
         }
         this.requestRawWithCallback(info2, data, callbackForResult);
@@ -9449,12 +9449,12 @@ var HttpClient = class {
     return __awaiter(this, void 0, void 0, function* () {
       retryNumber = Math.min(ExponentialBackoffCeiling, retryNumber);
       const ms = ExponentialBackoffTimeSlice * Math.pow(2, retryNumber);
-      return new Promise((resolve8) => setTimeout(() => resolve8(), ms));
+      return new Promise((resolve9) => setTimeout(() => resolve9(), ms));
     });
   }
   _processResponse(res, options) {
     return __awaiter(this, void 0, void 0, function* () {
-      return new Promise((resolve8, reject) => __awaiter(this, void 0, void 0, function* () {
+      return new Promise((resolve9, reject) => __awaiter(this, void 0, void 0, function* () {
         const statusCode = res.message.statusCode || 0;
         const response = {
           statusCode,
@@ -9462,7 +9462,7 @@ var HttpClient = class {
           headers: {}
         };
         if (statusCode === HttpCodes.NotFound) {
-          resolve8(response);
+          resolve9(response);
         }
         function dateTimeDeserializer(key, value) {
           if (typeof value === "string") {
@@ -9501,7 +9501,7 @@ var HttpClient = class {
           err.result = response.result;
           reject(err);
         } else {
-          resolve8(response);
+          resolve9(response);
         }
       }));
     });
@@ -9512,11 +9512,11 @@ var lowercaseKeys = (obj) => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase(
 // ../../node_modules/.pnpm/@actions+http-client@4.0.1/node_modules/@actions/http-client/lib/auth.js
 var __awaiter2 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve8) {
-      resolve8(value);
+    return value instanceof P ? value : new P(function(resolve9) {
+      resolve9(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve8, reject) {
+  return new (P || (P = Promise))(function(resolve9, reject) {
     function fulfilled(value) {
       try {
         step2(generator.next(value));
@@ -9532,7 +9532,7 @@ var __awaiter2 = function(thisArg, _arguments, P, generator) {
       }
     }
     function step2(result) {
-      result.done ? resolve8(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve9(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step2((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -9565,11 +9565,11 @@ import { EOL as EOL3 } from "os";
 import { constants, promises } from "fs";
 var __awaiter3 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve8) {
-      resolve8(value);
+    return value instanceof P ? value : new P(function(resolve9) {
+      resolve9(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve8, reject) {
+  return new (P || (P = Promise))(function(resolve9, reject) {
     function fulfilled(value) {
       try {
         step2(generator.next(value));
@@ -9585,7 +9585,7 @@ var __awaiter3 = function(thisArg, _arguments, P, generator) {
       }
     }
     function step2(result) {
-      result.done ? resolve8(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve9(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step2((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -9864,11 +9864,11 @@ var arch = os3.arch();
 // ../../node_modules/.pnpm/@actions+core@3.0.1/node_modules/@actions/core/lib/core.js
 var __awaiter4 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve8) {
-      resolve8(value);
+    return value instanceof P ? value : new P(function(resolve9) {
+      resolve9(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve8, reject) {
+  return new (P || (P = Promise))(function(resolve9, reject) {
     function fulfilled(value) {
       try {
         step2(generator.next(value));
@@ -9884,7 +9884,7 @@ var __awaiter4 = function(thisArg, _arguments, P, generator) {
       }
     }
     function step2(result) {
-      result.done ? resolve8(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve9(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step2((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -11564,32 +11564,32 @@ function literalToJson(lit) {
       return null;
   }
 }
-function evaluate(e, resolve8) {
+function evaluate(e, resolve9) {
   if (e instanceof Literal) return known(literalToJson(e));
-  if (e instanceof Grouping) return evaluate(e.group, resolve8);
+  if (e instanceof Grouping) return evaluate(e.group, resolve9);
   if (e instanceof ContextAccess || e instanceof IndexAccess) {
-    const chain = refChain(e, resolve8);
+    const chain = refChain(e, resolve9);
     if (chain) {
-      const resolved = resolve8(chain);
+      const resolved = resolve9(chain);
       return resolved ?? UNKNOWN;
     }
     if (e instanceof IndexAccess) {
-      const base = evaluate(e.expr, resolve8);
-      const idx = e.index instanceof Star ? void 0 : evaluate(e.index, resolve8);
+      const base = evaluate(e.expr, resolve9);
+      const idx = e.index instanceof Star ? void 0 : evaluate(e.index, resolve9);
       if (!base.known || !idx?.known) return { known: false, taint: mergeTaint(base, ...idx ? [idx] : []) };
       return known(indexInto(base.value, idx.value), mergeTaint(base, idx));
     }
     return UNKNOWN;
   }
   if (e instanceof Unary) {
-    const v = evaluate(e.expr, resolve8);
+    const v = evaluate(e.expr, resolve9);
     return v.known ? known(!truthy2(v.value)) : UNKNOWN;
   }
   if (e instanceof Logical) {
     const isAnd = e.operator.type === TokenType.AND;
     let last = UNKNOWN;
     for (const [i, arg] of e.args.entries()) {
-      const v = evaluate(arg, resolve8);
+      const v = evaluate(arg, resolve9);
       last = v;
       if (!v.known) return v;
       if (isAnd ? !truthy2(v.value) : truthy2(v.value)) {
@@ -11599,8 +11599,8 @@ function evaluate(e, resolve8) {
     return last;
   }
   if (e instanceof Binary) {
-    const l = evaluate(e.left, resolve8);
-    const r = evaluate(e.right, resolve8);
+    const l = evaluate(e.left, resolve9);
+    const r = evaluate(e.right, resolve9);
     const taint = [];
     if (!l.known || !r.known) return UNKNOWN;
     switch (e.operator.type) {
@@ -11624,17 +11624,17 @@ function evaluate(e, resolve8) {
         return { known: false, taint };
     }
   }
-  if (e instanceof FunctionCall) return evalCall(e, resolve8);
+  if (e instanceof FunctionCall) return evalCall(e, resolve9);
   return UNKNOWN;
 }
-function refChain(e, resolve8) {
+function refChain(e, resolve9) {
   if (e instanceof ContextAccess) return { context: e.name.lexeme.toLowerCase(), path: [] };
   if (e instanceof IndexAccess) {
-    const base = refChain(e.expr, resolve8);
+    const base = refChain(e.expr, resolve9);
     if (!base) return void 0;
     if (e.index instanceof Star) return void 0;
     if (e.index instanceof Literal) return { ...base, path: [...base.path, toStr(literalToJson(e.index))] };
-    const idx = evaluate(e.index, resolve8);
+    const idx = evaluate(e.index, resolve9);
     if (idx.known && (typeof idx.value === "string" || typeof idx.value === "number")) {
       return { ...base, path: [...base.path, String(idx.value)] };
     }
@@ -11655,9 +11655,9 @@ function indexInto(base, idx) {
   return null;
 }
 var RUNTIME_FUNCTIONS = /* @__PURE__ */ new Set(["success", "failure", "cancelled", "hashfiles"]);
-function evalCall(e, resolve8) {
+function evalCall(e, resolve9) {
   const name = e.functionName.lexeme.toLowerCase();
-  const args = e.args.map((a) => evaluate(a, resolve8));
+  const args = e.args.map((a) => evaluate(a, resolve9));
   const taint = mergeTaint(...args);
   const allKnown = args.every((a) => a.known);
   const vals = args.map((a) => a.known ? a.value : null);
@@ -11816,37 +11816,37 @@ function fallbacksOf(expr) {
   visit2(expr.ast);
   return out;
 }
-function definitelyFalsy(e, resolve8) {
-  if (e instanceof Grouping) return definitelyFalsy(e.group, resolve8);
+function definitelyFalsy(e, resolve9) {
+  if (e instanceof Grouping) return definitelyFalsy(e.group, resolve9);
   if (e instanceof Logical) {
-    return e.operator.type === TokenType.AND ? e.args.some((a) => definitelyFalsy(a, resolve8)) : e.args.every((a) => definitelyFalsy(a, resolve8));
+    return e.operator.type === TokenType.AND ? e.args.some((a) => definitelyFalsy(a, resolve9)) : e.args.every((a) => definitelyFalsy(a, resolve9));
   }
-  if (e instanceof Unary) return definitelyTruthy(e.expr, resolve8);
-  const v = evaluate(e, resolve8);
+  if (e instanceof Unary) return definitelyTruthy(e.expr, resolve9);
+  const v = evaluate(e, resolve9);
   return v.known && !truthy2(v.value);
 }
-function definitelyTruthy(e, resolve8) {
-  if (e instanceof Grouping) return definitelyTruthy(e.group, resolve8);
+function definitelyTruthy(e, resolve9) {
+  if (e instanceof Grouping) return definitelyTruthy(e.group, resolve9);
   if (e instanceof Logical) {
-    return e.operator.type === TokenType.AND ? e.args.every((a) => definitelyTruthy(a, resolve8)) : e.args.some((a) => definitelyTruthy(a, resolve8));
+    return e.operator.type === TokenType.AND ? e.args.every((a) => definitelyTruthy(a, resolve9)) : e.args.some((a) => definitelyTruthy(a, resolve9));
   }
-  if (e instanceof Unary) return definitelyFalsy(e.expr, resolve8);
-  const v = evaluate(e, resolve8);
+  if (e instanceof Unary) return definitelyFalsy(e.expr, resolve9);
+  const v = evaluate(e, resolve9);
   return v.known && truthy2(v.value);
 }
-function evaluateTemplate(text2, resolve8) {
+function evaluateTemplate(text2, resolve9) {
   const segments = findTemplateSegments(text2);
   if (segments.length === 0) return known(text2);
   const first = segments[0];
   if (segments.length === 1 && first.start === 0 && first.end === text2.length) {
-    return first.expr.ast ? evaluate(first.expr.ast, resolve8) : UNKNOWN;
+    return first.expr.ast ? evaluate(first.expr.ast, resolve9) : UNKNOWN;
   }
   let out = "";
   let cursor = 0;
   const parts = [];
   for (const seg of segments) {
     out += text2.slice(cursor, seg.start);
-    const v = seg.expr.ast ? evaluate(seg.expr.ast, resolve8) : UNKNOWN;
+    const v = seg.expr.ast ? evaluate(seg.expr.ast, resolve9) : UNKNOWN;
     parts.push(v);
     if (!v.known) return { known: false, taint: mergeTaint(...parts) };
     out += toStr(v.value);
@@ -12338,7 +12338,7 @@ function gitFileSystem(root, commit) {
       targets.set(link, git(root, ["cat-file", "blob", `${commit}:${link}`]).toString());
     return targets.get(link);
   };
-  const resolve8 = (path) => {
+  const resolve9 = (path) => {
     let p = path;
     for (let followed = 0; ; followed++) {
       const parts = p.split("/");
@@ -12378,7 +12378,7 @@ function gitFileSystem(root, commit) {
     const d = dir ? `${dir}/` : "";
     for (const f of within2(sortedBlobs, d)) files.set(`${as}${f.slice(d.length)}`, f);
     for (const link of within2(sortedLinks, d)) {
-      const to = resolve8(link);
+      const to = resolve9(link);
       if (to === void 0 || !inRoot(to)) continue;
       const at = `${as}${link.slice(d.length)}`;
       const chain = [...via, link];
@@ -17439,7 +17439,7 @@ function workspaceResolver(opts) {
     }
     return best;
   };
-  const resolve8 = (uses, ws) => {
+  const resolve9 = (uses, ws) => {
     const target = uses.target;
     if (uses.selfRef !== void 0) return { kind: "invalid" };
     if (uses.workspacePath === void 0) {
@@ -17507,7 +17507,7 @@ function workspaceResolver(opts) {
         continue;
       }
       if (uses.kind !== "local-action" || uses.target === void 0) continue;
-      const outcome = resolve8(uses, ws);
+      const outcome = resolve9(uses, ws);
       record2(unit, job, step2, outcome, rooted, via);
       const action = outcome.kind === "local" && outcome.found ? opts.loadAction(outcome.target) : void 0;
       if (action) {
@@ -24247,7 +24247,7 @@ function combosOf(exp) {
   const values = Object.fromEntries((exp?.keys ?? []).map((k) => [k, { known: false }]));
   return [{ values, origin: "product", includes: [] }];
 }
-var unknownKey = (resolve8, key) => (ref) => ref.context === "matrix" && ref.path[0]?.toLowerCase() === key ? UNKNOWN : resolve8(ref);
+var unknownKey = (resolve9, key) => (ref) => ref.context === "matrix" && ref.path[0]?.toLowerCase() === key ? UNKNOWN : resolve9(ref);
 function onlyFallbacks(site, key, job, exp) {
   if (exp && didYouMean(key, exp.keys)) return false;
   const lower = key.toLowerCase();
@@ -24262,8 +24262,8 @@ function neverTrue(site, lower, combos) {
   const ast = site.segments[0].expr.ast;
   if (!ast) return true;
   return combos.every((c) => {
-    const resolve8 = matrixResolver(c);
-    return definitelyFalsy(ast, resolve8) && !definitelyFalsy(ast, unknownKey(resolve8, lower));
+    const resolve9 = matrixResolver(c);
+    return definitelyFalsy(ast, resolve9) && !definitelyFalsy(ast, unknownKey(resolve9, lower));
   });
 }
 function readsFallBack(seg, lower, combos) {
@@ -25083,10 +25083,10 @@ function guardsOf2(wf, site) {
     (g) => g !== void 0 && g !== site
   );
 }
-function isFalse(guard, resolve8) {
+function isFalse(guard, resolve9) {
   if (guard === false) return true;
   const ast = isWholeExpression(guard) ? guard.segments[0].expr.ast : void 0;
-  return ast !== void 0 && definitelyFalsy(ast, resolve8);
+  return ast !== void 0 && definitelyFalsy(ast, resolve9);
 }
 var secretRules = [
   missingRequiredSecret,
@@ -26830,6 +26830,23 @@ async function loadPlugins(root, config2, registry2, logger = silentLogger) {
   return loaded;
 }
 
+// ../lint/src/remotes-cache.ts
+import { randomBytes } from "crypto";
+import {
+  existsSync as existsSync7,
+  mkdirSync as mkdirSync2,
+  readdirSync as readdirSync2,
+  renameSync,
+  rmdirSync,
+  rmSync as rmSync2,
+  statSync as statSync3,
+  utimesSync,
+  writeFileSync as writeFileSync2
+} from "fs";
+import { homedir } from "os";
+import { dirname as dirname4, isAbsolute as isAbsolute6, join as join6, relative as relative6, resolve as resolve6 } from "path";
+var sourceFiles = (r) => r.kind === "workflow" ? [r.path] : ["action.yml", "action.yaml"].map((n) => r.path ? `${r.path}/${n}` : n);
+
 // ../lint/src/remotes-fetch.ts
 var FetchError = class extends Error {
   constructor(message, unreadable = false) {
@@ -26907,22 +26924,24 @@ async function shaOf(r, opts) {
   return sha.trim();
 }
 var fileAt2 = (r, path, sha, opts) => get2(`${repoUrl(r, opts)}/contents/${contentsPath(path)}?ref=${sha}`, "application/vnd.github.raw", opts);
+async function sourceAt(r, sha, opts) {
+  for (const file of sourceFiles(r)) {
+    const text2 = await fileAt2(r, file, sha, opts);
+    if (text2 === void 0) continue;
+    opts.onSource?.({ ref: r, sha, file, text: text2 });
+    return { file, text: text2 };
+  }
+  const what = r.kind === "workflow" ? `${r.path} not found` : `no action.yml in ${r.path || "the repository root"}`;
+  throw new FetchError(`${what} at ${sha.slice(0, 7)}`, true);
+}
 async function fetchRemoteEntry(r, opts = {}) {
   const sha = await shaOf(r, opts);
   const ctx = createParseContext(`${r.owner}/${r.repo}`);
-  if (r.kind === "workflow") {
-    const text2 = await fileAt2(r, r.path, sha, opts);
-    if (text2 === void 0) throw new FetchError(`${r.path} not found at ${sha.slice(0, 7)}`, true);
-    const wf = parseWorkflowFile(r.raw, text2, ctx);
-    const undeclared = undeclaredSecretsRead(wf);
-    return { ...lockEntryOf(wf, sha), ...undeclared.length ? { undeclaredSecrets: undeclared } : {} };
-  }
-  for (const name of ["action.yml", "action.yaml"]) {
-    const file = r.path ? `${r.path}/${name}` : name;
-    const text2 = await fileAt2(r, file, sha, opts);
-    if (text2 !== void 0) return lockEntryOf(parseActionFile(r.raw, file, text2, ctx), sha);
-  }
-  throw new FetchError(`no action.yml in ${r.path || "the repository root"} at ${sha.slice(0, 7)}`, true);
+  const { file, text: text2 } = await sourceAt(r, sha, opts);
+  if (r.kind === "action") return lockEntryOf(parseActionFile(r.raw, file, text2, ctx), sha);
+  const wf = parseWorkflowFile(r.raw, text2, ctx);
+  const undeclared = undeclaredSecretsRead(wf);
+  return { ...lockEntryOf(wf, sha), ...undeclared.length ? { undeclaredSecrets: undeclared } : {} };
 }
 async function fetchWithFallback(r, opts) {
   try {
@@ -26953,14 +26972,14 @@ async function tryFetch(r, opts, out) {
   try {
     return await fetchWithFallback(r, opts);
   } catch (e) {
-    if (!(e instanceof FetchError) && !(e instanceof TypeError) && e.name !== "TimeoutError")
-      throw e;
+    if (!isFetchFailure(e)) throw e;
     const problem = { ref: r.raw, error: e.message };
     if (e instanceof FetchError && e.unreadable) out.unreadable.push(problem);
     else out.failed.push(problem);
     return void 0;
   }
 }
+var isFetchFailure = (e) => e instanceof FetchError || e instanceof TypeError || e.name === "TimeoutError";
 async function fetchCounted(r, opts, out, count) {
   const entry = await tryFetch(r, opts, out);
   count.done++;
@@ -27869,8 +27888,8 @@ var import_yaml9 = __toESM(require_dist(), 1);
 
 // src/upload.ts
 import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
-import { readFileSync as readFileSync4, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute6, relative as relative6, resolve as resolve6, sep as sep3 } from "path";
+import { readFileSync as readFileSync4, statSync as statSync4 } from "fs";
+import { isAbsolute as isAbsolute7, relative as relative7, resolve as resolve7, sep as sep3 } from "path";
 import { Readable } from "stream";
 import { crc32, deflateRawSync } from "zlib";
 var SERVICE = "github.actions.results.api.v1.ArtifactService";
@@ -28027,7 +28046,7 @@ async function blobRequest(http2, url2, body, headers, what, secrets) {
 }
 async function uploadBlob(signedUrl, zip2, secrets) {
   const http2 = new HttpClient(USER_AGENT, [], { socketTimeout: stallTimeout() });
-  const join7 = signedUrl.includes("?") ? "&" : "?";
+  const join8 = signedUrl.includes("?") ? "&" : "?";
   const prefix = randomUUID2();
   const ids = [];
   for (let at = 0; at < zip2.length; at += BLOCK_SIZE) {
@@ -28035,7 +28054,7 @@ async function uploadBlob(signedUrl, zip2, secrets) {
     ids.push(id);
     await blobRequest(
       http2,
-      `${signedUrl}${join7}comp=block&blockid=${encodeURIComponent(id)}`,
+      `${signedUrl}${join8}comp=block&blockid=${encodeURIComponent(id)}`,
       zip2.subarray(at, at + BLOCK_SIZE),
       { "Content-Type": "application/octet-stream" },
       "Put Block",
@@ -28046,7 +28065,7 @@ async function uploadBlob(signedUrl, zip2, secrets) {
   const list = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><BlockList>${latest}</BlockList>`;
   await blobRequest(
     http2,
-    `${signedUrl}${join7}comp=blocklist`,
+    `${signedUrl}${join8}comp=blocklist`,
     Buffer.from(list),
     { "Content-Type": "application/xml", "x-ms-blob-content-type": "application/zip" },
     "Put Block List",
@@ -28117,16 +28136,16 @@ async function uploadArtifact(name, files, rootDirectory, options = {}) {
       `The artifact name "${name}" is empty or contains one of " : < > | * ? \\ / or a line break`
     );
   if (!files.length) throw new Error("No files were found to upload");
-  const root = resolve6(rootDirectory);
+  const root = resolve7(rootDirectory);
   const entries2 = files.map((file) => {
-    const path = relative6(root, resolve6(file));
-    if (!path || path === ".." || path.startsWith(`..${sep3}`) || isAbsolute6(path))
+    const path = relative7(root, resolve7(file));
+    if (!path || path === ".." || path.startsWith(`..${sep3}`) || isAbsolute7(path))
       throw new Error(`${file} is not inside the artifact's root directory ${root}`);
     const entry = path.split(sep3).join("/");
     if (BAD_PATH.test(entry))
       throw new Error(`The path ${entry} contains one of " : < > | * ? or a line break`);
     const data = readFileSync4(file);
-    const { mode, mtime } = statSync3(file);
+    const { mode, mtime } = statSync4(file);
     return { name: entry, data, mode, mtime };
   });
   const token = process.env.ACTIONS_RUNTIME_TOKEN;
@@ -28188,7 +28207,7 @@ var DEFAULTS2 = {
   token: "${{ github.token }}",
   debug: "false"
 };
-var ACTION_DIR = resolve7(dirname4(fileURLToPath(import.meta.url)), "../../..");
+var ACTION_DIR = resolve8(dirname5(fileURLToPath(import.meta.url)), "../../..");
 var UNTRUSTED_EVENTS = /* @__PURE__ */ new Set(["pull_request_target", "workflow_run"]);
 var SUMMARY_LIMIT = 1e6;
 var PATCH_FILE = "flowpact-contracts.patch";
@@ -28216,7 +28235,7 @@ function int3(name) {
     throw new InputError(`Input ${name} must be a non-negative integer (got "${value}")`);
   return Number(value);
 }
-var fromActionDir = (p) => isAbsolute7(p) ? p : resolve7(ACTION_DIR, p);
+var fromActionDir = (p) => isAbsolute8(p) ? p : resolve8(ACTION_DIR, p);
 function declaredDefaultsOf(actionYml) {
   const defaults = {};
   try {
@@ -28233,7 +28252,7 @@ function declaredDefaultsOf(actionYml) {
 }
 var declaredDefaults;
 function declaredDefault(name) {
-  declaredDefaults ??= declaredDefaultsOf(join6(ACTION_DIR, "action.yml"));
+  declaredDefaults ??= declaredDefaultsOf(join7(ACTION_DIR, "action.yml"));
   return declaredDefaults[name]?.trim() || DEFAULTS2[name];
 }
 var orgInput = (name) => getInput(name).trim() || declaredDefault(name);
@@ -28438,11 +28457,11 @@ function annotate(f, prefix) {
   else notice(message, props);
 }
 function writeReport(workspace, file, content) {
-  const abs = resolve7(workspace, file);
+  const abs = resolve8(workspace, file);
   assertSafeWritePath(abs, [workspace]);
-  mkdirSync2(dirname4(abs), { recursive: true });
-  writeFileSync2(abs, content);
-  const shown = toPosix3(relative7(workspace, abs));
+  mkdirSync3(dirname5(abs), { recursive: true });
+  writeFileSync3(abs, content);
+  const shown = toPosix3(relative8(workspace, abs));
   info(`wrote ${shown.startsWith("..") ? abs : shown}`);
   return abs;
 }
@@ -28474,24 +28493,24 @@ async function driftArtifact(plan, prefix, inputs, runId) {
   const runnerTemp = process.env.RUNNER_TEMP;
   let dir;
   if (runnerTemp) {
-    dir = join6(runnerTemp, name);
-    rmSync2(dir, { recursive: true, force: true });
-    mkdirSync2(dir, { recursive: true });
+    dir = join7(runnerTemp, name);
+    rmSync3(dir, { recursive: true, force: true });
+    mkdirSync3(dir, { recursive: true });
   } else {
-    dir = mkdtempSync(join6(tmpdir(), `${name}-`));
+    dir = mkdtempSync(join7(tmpdir(), `${name}-`));
   }
   const repoPlan = {
     ...plan,
     entries: plan.entries.map((e) => ({ ...e, file: inRepository(e.file, prefix) }))
   };
-  const patch = join6(dir, PATCH_FILE);
-  writeFileSync2(patch, contractPatch(repoPlan));
-  const contracts = writeContracts(dir, repoPlan, join6(dir, ARTIFACT_DIR));
-  writeFileSync2(join6(dir, ARTIFACT_DIR, "README.md"), artifactReadme(plan, inputs.artifactName, runId));
+  const patch = join7(dir, PATCH_FILE);
+  writeFileSync3(patch, contractPatch(repoPlan));
+  const contracts = writeContracts(dir, repoPlan, join7(dir, ARTIFACT_DIR));
+  writeFileSync3(join7(dir, ARTIFACT_DIR, "README.md"), artifactReadme(plan, inputs.artifactName, runId));
   const files = [
     patch,
-    join6(dir, ARTIFACT_DIR, "README.md"),
-    ...contracts.map((f) => join6(dir, ARTIFACT_DIR, f))
+    join7(dir, ARTIFACT_DIR, "README.md"),
+    ...contracts.map((f) => join7(dir, ARTIFACT_DIR, f))
   ];
   info(`wrote ${PATCH_FILE} and ${plural2(contracts.length, "contract file")} to ${dir}`);
   const out = { dir, patch };
@@ -28567,13 +28586,13 @@ function logging(debug2, envLevel) {
   return { logger, group: group2, loggedGroup };
 }
 function placeOf(workingDirectory) {
-  const workspace = resolve7(process.env.GITHUB_WORKSPACE || process.cwd());
-  const root = resolve7(workspace, workingDirectory);
-  const rel = toPosix3(relative7(workspace, root));
+  const workspace = resolve8(process.env.GITHUB_WORKSPACE || process.cwd());
+  const root = resolve8(workspace, workingDirectory);
+  const rel = toPosix3(relative8(workspace, root));
   return { workspace, root, prefix: rel === "" || rel === "." ? "" : rel };
 }
 function loadInputConfig(inputs, { root, prefix }) {
-  const loaded = loadConfig(root, inputs.config ? resolve7(root, inputs.config) : void 0, {
+  const loaded = loadConfig(root, inputs.config ? resolve8(root, inputs.config) : void 0, {
     ...inputs.baseConfig ? { base: inputs.baseConfig } : {}
   });
   info(
@@ -28589,7 +28608,7 @@ function inputPlugins(inputs, { workspace, root }, pluginsOff) {
   const extraPlugins = inputs.extraPlugins.filter((p) => inputs.plugins || !inCheckout(p));
   const skippedPlugins = inputs.extraPlugins.filter((p) => !extraPlugins.includes(p));
   if (skippedPlugins.length) {
-    const names = skippedPlugins.map((p) => toPosix3(relative7(workspace, p))).join(", ");
+    const names = skippedPlugins.map((p) => toPosix3(relative8(workspace, p))).join(", ");
     warning(`Not loading the plugin input's ${names} from the checkout: ${pluginsOff}.`);
   }
   return extraPlugins;
