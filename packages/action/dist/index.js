@@ -287,10 +287,10 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias4 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
     var isDocument2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
-    var isMap5 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
+    var isMap6 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     var isPair3 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
-    var isScalar5 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR2;
-    var isSeq5 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
+    var isScalar6 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR2;
+    var isSeq6 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
     function isCollection2(node) {
       if (node && typeof node === "object")
         switch (node[NODE_TYPE]) {
@@ -311,7 +311,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar5(node) || isCollection2(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar6(node) || isCollection2(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -323,11 +323,11 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias4;
     exports.isCollection = isCollection2;
     exports.isDocument = isDocument2;
-    exports.isMap = isMap5;
+    exports.isMap = isMap6;
     exports.isNode = isNode;
     exports.isPair = isPair3;
-    exports.isScalar = isScalar5;
-    exports.isSeq = isSeq5;
+    exports.isScalar = isScalar6;
+    exports.isSeq = isSeq6;
   }
 });
 
@@ -4271,13 +4271,13 @@ var require_resolve_block_map = __commonJS({
           onError(offset, "BAD_INDENT", startColMsg);
         }
         ctx.atKey = true;
-        const keyStart = keyProps.end;
-        const keyNode = key ? composeNode(ctx, key, keyProps, onError) : composeEmptyNode(ctx, keyStart, start, null, keyProps, onError);
+        const keyStart2 = keyProps.end;
+        const keyNode = key ? composeNode(ctx, key, keyProps, onError) : composeEmptyNode(ctx, keyStart2, start, null, keyProps, onError);
         if (ctx.schema.compat)
           utilFlowIndentCheck.flowIndentCheck(bm.indent, key, onError);
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
-          onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
+          onError(keyStart2, "DUPLICATE_KEY", "Map keys must be unique");
         const valueProps = resolveProps.resolveProps(sep5 ?? [], {
           indicator: "map-value-ind",
           next: value,
@@ -4435,9 +4435,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap5 = fc.start.source === "{";
-      const fcName = isMap5 ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap5 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap6 = fc.start.source === "{";
+      const fcName = isMap6 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap6 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -4473,7 +4473,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap5 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap6 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -4513,7 +4513,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap5 && !sep5 && !props.found) {
+        if (!isMap6 && !sep5 && !props.found) {
           const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -4521,8 +4521,8 @@ var require_resolve_flow_collection = __commonJS({
             onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
         } else {
           ctx.atKey = true;
-          const keyStart = props.end;
-          const keyNode = key ? composeNode(ctx, key, props, onError) : composeEmptyNode(ctx, keyStart, start, null, props, onError);
+          const keyStart2 = props.end;
+          const keyNode = key ? composeNode(ctx, key, props, onError) : composeEmptyNode(ctx, keyStart2, start, null, props, onError);
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
@@ -4536,7 +4536,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap5 && !props.found && ctx.options.strict) {
+            if (!isMap6 && !props.found && ctx.options.strict) {
               if (sep5)
                 for (const st of sep5) {
                   if (st === valueProps.found)
@@ -4568,10 +4568,10 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap5) {
+          if (isMap6) {
             const map = coll;
             if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
-              onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
+              onError(keyStart2, "DUPLICATE_KEY", "Map keys must be unique");
             map.items.push(pair);
           } else {
             const map = new YAMLMap.YAMLMap(ctx.schema);
@@ -4584,7 +4584,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap5 ? "}" : "]";
+      const expectedEnd = isMap6 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -5871,7 +5871,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR2 = "";
     var isCollection2 = (token) => !!token && "items" in token;
-    var isScalar5 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar6 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -5955,7 +5955,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR2;
     exports.isCollection = isCollection2;
-    exports.isScalar = isScalar5;
+    exports.isScalar = isScalar6;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -7485,7 +7485,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument5(source, options = {}) {
+    function parseDocument6(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7511,7 +7511,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver2 && typeof reviver2 === "object") {
         options = reviver2;
       }
-      const doc = parseDocument5(src, options);
+      const doc = parseDocument6(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning2) => log.warn(doc.options.logLevel, warning2));
@@ -7547,7 +7547,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse3;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument5;
+    exports.parseDocument = parseDocument6;
     exports.stringify = stringify3;
   }
 });
@@ -13405,7 +13405,7 @@ function buildSite(unit, node, text2, c, p, ownerPath, ctx) {
 function rawScalar(source, node) {
   const [start, end] = node.range ?? [0, 0];
   const raw = source.text.slice(start, end);
-  const quoted = node.type === "QUOTE_SINGLE" || node.type === "QUOTE_DOUBLE";
+  const quoted2 = node.type === "QUOTE_SINGLE" || node.type === "QUOTE_DOUBLE";
   return {
     source,
     start,
@@ -13413,7 +13413,7 @@ function rawScalar(source, node) {
     quote: node.type === "QUOTE_SINGLE" ? "''" : "'",
     escapes: node.type === "QUOTE_DOUBLE",
     open: valueStart(node.type, raw),
-    close: quoted ? raw.length - 1 : raw.length
+    close: quoted2 ? raw.length - 1 : raw.length
   };
 }
 function valueStart(type, raw) {
@@ -16913,10 +16913,10 @@ function shapeOf(unit) {
     return { file: unit.file, line: a.line, column: a.col, endLine: b.line, endColumn: b.col };
   };
   const mergeOf = (value) => {
-    const sources = (0, import_yaml4.isSeq)(value) ? value.items : [value];
-    const maps = sources.map((s) => (0, import_yaml4.isAlias)(s) ? s.resolve(doc) : s).filter(import_yaml4.isMap);
+    const sources2 = (0, import_yaml4.isSeq)(value) ? value.items : [value];
+    const maps = sources2.map((s) => (0, import_yaml4.isAlias)(s) ? s.resolve(doc) : s).filter(import_yaml4.isMap);
     const keys = maps.flatMap((m) => m.items.flatMap((p) => (0, import_yaml4.isScalar)(p.key) ? [String(p.key.value)] : []));
-    const aliases = sources.filter(import_yaml4.isAlias).map((a) => `*${a.source}`);
+    const aliases = sources2.filter(import_yaml4.isAlias).map((a) => `*${a.source}`);
     return { aliases: [...new Set(aliases)], keys };
   };
   const walk = (node, path) => {
@@ -17292,10 +17292,10 @@ function scriptWrites2(script) {
       cwd = dirs.pop();
     } else if (COPIES.has(name) || name === "robocopy") {
       const dest = target ?? (name === "robocopy" ? operands[1] : operands.length > 1 ? operands.at(-1) : void 0);
-      const sources = target !== void 0 ? operands : name === "robocopy" ? [] : operands.slice(0, -1);
+      const sources2 = target !== void 0 ? operands : name === "robocopy" ? [] : operands.slice(0, -1);
       if (dest === void 0) return;
       write(dest, name);
-      for (const s of sources) if (!/[$`*?[\]{}]/.test(basename(s))) write(`${dest}/${basename(s)}`, name);
+      for (const s of sources2) if (!/[$`*?[\]{}]/.test(basename(s))) write(`${dest}/${basename(s)}`, name);
     } else if (CREATES.has(name)) {
       for (const o of operands) write(o, name);
     }
@@ -22397,9 +22397,9 @@ function outputConditions(index, unit) {
   const out = /* @__PURE__ */ new Map();
   const outputs = unit.kind === "workflow" ? unit.call?.outputs : unit.outputs;
   for (const name of Object.keys(outputs ?? {})) {
-    const sources = unit.kind === "workflow" ? workflowOutputSources(index, unit, name) : sourcesIn(unit, "action.output", name, "steps").map((s) => stepConditions(unit.steps, s.owner, ""));
-    const always = !sources.length || sources.some((c) => !c.length);
-    out.set(name.toLowerCase(), always ? [] : sources.flat());
+    const sources2 = unit.kind === "workflow" ? workflowOutputSources(index, unit, name) : sourcesIn(unit, "action.output", name, "steps").map((s) => stepConditions(unit.steps, s.owner, ""));
+    const always = !sources2.length || sources2.some((c) => !c.length);
+    out.set(name.toLowerCase(), always ? [] : sources2.flat());
   }
   return out;
 }
@@ -22542,28 +22542,28 @@ function levelFromVersions(previous, next, bumps) {
 }
 var countedChanges = (changes, policy) => changes.filter((c) => c.certain || policy.uncertain === "fail");
 function declaredSources(input2, policy) {
-  const sources = [];
-  if (input2.explicit) sources.push({ kind: "explicit", value: input2.explicit, level: input2.explicit });
+  const sources2 = [];
+  if (input2.explicit) sources2.push({ kind: "explicit", value: input2.explicit, level: input2.explicit });
   if (input2.release) {
     const level = levelFromVersions(input2.release.previous, input2.release.version, input2.release);
-    sources.push({ kind: "version", value: `${input2.release.previous} \u2192 ${input2.release.version}`, level });
+    sources2.push({ kind: "version", value: `${input2.release.previous} \u2192 ${input2.release.version}`, level });
   } else if (input2.title !== void 0) {
     const level = levelFromTitle(input2.title, policy.types);
-    if (level) sources.push({ kind: "title", value: input2.title, level });
+    if (level) sources2.push({ kind: "title", value: input2.title, level });
   }
   if (input2.labels?.length) {
     const level = levelFromLabels(input2.labels, policy.labels);
-    if (level) sources.push({ kind: "labels", value: input2.labels.join(", "), level });
+    if (level) sources2.push({ kind: "labels", value: input2.labels.join(", "), level });
   }
-  return sources;
+  return sources2;
 }
 var authorityOf = (input2, policy) => input2.explicit ? "explicit" : input2.release ? "version" : policy.declaredBy ?? "title";
 function impactVerdict(changes, input2, policy) {
   const required2 = maxLevel(countedChanges(changes, policy).map((c) => c.level));
-  const sources = declaredSources(input2, policy);
+  const sources2 = declaredSources(input2, policy);
   const authority = authorityOf(input2, policy);
-  const declared = sources.find((s) => s.kind === authority);
-  const advisory = sources.filter((s) => s !== declared);
+  const declared = sources2.find((s) => s.kind === authority);
+  const advisory = sources2.filter((s) => s !== declared);
   const conflict = declared ? advisory.find((s) => levelRank(s.level) > levelRank(declared.level)) : void 0;
   const under = declared && levelRank(required2) > levelRank(declared.level) && levelRank(required2) >= levelRank("minor");
   return {
@@ -23550,6 +23550,152 @@ var impactRules = [
 ];
 var IMPACT_CODES = impactRules.map((r) => r.code);
 
+// ../lint/src/suggestions.ts
+var import_yaml10 = __toESM(require_dist(), 1);
+var sources = /* @__PURE__ */ new WeakMap();
+function sourceOf(index, file) {
+  let byFile = sources.get(index);
+  if (!byFile) {
+    byFile = new Map(index.units().map((u) => [u.source.path, u.source]));
+    sources.set(index, byFile);
+  }
+  return byFile.get(file);
+}
+function textAt(source, loc) {
+  if (loc.line !== loc.endLine) return void 0;
+  return source.lines[loc.line - 1]?.slice(loc.column - 1, loc.endColumn - 1);
+}
+var quoted = (q) => q === "'" ? "'" : '"';
+function renameAt(index, loc, from, to) {
+  const source = sourceOf(index, loc.file);
+  const text2 = source && textAt(source, loc);
+  if (text2 === void 0) return void 0;
+  const q = /^(["'])(.*)\1$/.exec(text2);
+  const bare = q ? q[2] : text2;
+  if (bare?.toLowerCase() !== from.toLowerCase()) return void 0;
+  const newText = q ? `${quoted(q[1])}${to}${quoted(q[1])}` : to;
+  return { title: `Rename ${JSON.stringify(from)} to ${JSON.stringify(to)}`, edits: [{ loc, newText }] };
+}
+function renameSegment(index, loc, segment, from, to) {
+  const source = sourceOf(index, loc.file);
+  const text2 = source && textAt(source, loc);
+  if (text2 === void 0 || !/^[\w.-]+$/.test(text2)) return void 0;
+  const parts = text2.split(".");
+  if (parts[segment]?.toLowerCase() !== from.toLowerCase()) return void 0;
+  const column = loc.column + parts.slice(0, segment).reduce((n, p) => n + p.length + 1, 0);
+  const at = { ...loc, column, endColumn: column + parts[segment].length };
+  return {
+    title: `Rename ${JSON.stringify(from)} to ${JSON.stringify(to)}`,
+    edits: [{ loc: at, newText: to }]
+  };
+}
+var documents = /* @__PURE__ */ new WeakMap();
+function documentOf(source) {
+  let doc = documents.get(source);
+  if (!doc) {
+    doc = (0, import_yaml10.parseDocument)(source.text);
+    documents.set(source, doc);
+  }
+  return doc;
+}
+function pairOf(map, key) {
+  const pairs2 = map.items.filter((p) => (0, import_yaml10.isScalar)(p.key));
+  const name = (p) => String(p.key.value);
+  return pairs2.find((p) => name(p) === key) ?? pairs2.find((p) => name(p).toLowerCase() === key.toLowerCase());
+}
+function nodeAt(doc, path) {
+  let node = doc.contents;
+  for (const step2 of path) {
+    if (typeof step2 === "number") node = (0, import_yaml10.isSeq)(node) ? node.items[step2] : void 0;
+    else node = (0, import_yaml10.isMap)(node) ? pairOf(node, step2)?.value : void 0;
+    if (node === void 0) return void 0;
+  }
+  return node;
+}
+var isBlockMap = (node) => (0, import_yaml10.isMap)(node) && !node.flow && node.items.length > 0;
+var keyStart = (source, pair) => source.loc(pair.key.range[0]);
+function pairLines(source, pair) {
+  const first = keyStart(source, pair).line;
+  const end = pair.value?.range?.[1] ?? pair.key.range[1];
+  const at = source.loc(end);
+  return [first, at.column === 1 && at.line > first ? at.line - 1 : at.line];
+}
+function insertAfter(source, line, lines) {
+  const end = (source.lines[line - 1] ?? "").length + 1;
+  return {
+    loc: { file: source.path, line, column: end, endLine: line, endColumn: end },
+    newText: lines.map((l) => `
+${l}`).join("")
+  };
+}
+function removePair(source, pair) {
+  const [first, last] = pairLines(source, pair);
+  if (source.lines[first - 1].slice(0, keyStart(source, pair).column - 1).trim() !== "") return void 0;
+  if (last < source.lines.length)
+    return {
+      loc: { file: source.path, line: first, column: 1, endLine: last + 1, endColumn: 1 },
+      newText: ""
+    };
+  const before = first > 1 ? source.lines[first - 2].length + 1 : 1;
+  return {
+    loc: {
+      file: source.path,
+      line: Math.max(1, first - 1),
+      column: before,
+      endLine: last,
+      endColumn: source.lines[last - 1].length + 1
+    },
+    newText: ""
+  };
+}
+function editable(index, file) {
+  const source = sourceOf(index, file);
+  if (!source || source.text.includes("\r")) return void 0;
+  return { source, doc: documentOf(source) };
+}
+function addKeys(index, file, path, keys, after = []) {
+  const at = editable(index, file);
+  if (!at || keys.length === 0) return void 0;
+  const { source, doc } = at;
+  const map = nodeAt(doc, path);
+  if (map !== void 0) {
+    if (!isBlockMap(map)) return void 0;
+    const indent2 = " ".repeat(keyStart(source, map.items[0]).column - 1);
+    const [, last2] = pairLines(source, map.items.at(-1));
+    return insertAfter(
+      source,
+      last2,
+      keys.map((k) => `${indent2}${k}: `)
+    );
+  }
+  const own2 = path.at(-1);
+  const parent = nodeAt(doc, path.slice(0, -1));
+  if (typeof own2 !== "string" || !isBlockMap(parent)) return void 0;
+  const anchor2 = after.map((k) => pairOf(parent, k)).find((p) => p !== void 0) ?? parent.items.at(-1);
+  const indent = " ".repeat(keyStart(source, anchor2).column - 1);
+  const [, last] = pairLines(source, anchor2);
+  return insertAfter(source, last, [`${indent}${own2}:`, ...keys.map((k) => `${indent}  ${k}: `)]);
+}
+function removeKey(index, file, path, key, line) {
+  const at = editable(index, file);
+  if (!at) return void 0;
+  const { source, doc } = at;
+  const map = nodeAt(doc, path);
+  if (!isBlockMap(map)) return void 0;
+  const pair = pairOf(map, key);
+  if (!pair || line !== void 0 && keyStart(source, pair).line !== line) return void 0;
+  if (map.items.length > 1) return removePair(source, pair);
+  const own2 = path.at(-1);
+  const parent = nodeAt(doc, path.slice(0, -1));
+  const holder = typeof own2 === "string" && isBlockMap(parent) ? pairOf(parent, own2) : void 0;
+  return holder && removePair(source, holder);
+}
+var stepWithPath = (job, step2) => job === void 0 ? ["runs", "steps", step2, "with"] : ["jobs", job, "steps", step2, "with"];
+function suggestion(title, edits) {
+  if (edits.length === 0 || edits.some((e) => e === void 0)) return void 0;
+  return { title, edits };
+}
+
 // ../lint/src/rules/inputs.ts
 function eventInputReadsByRoot(index) {
   const out = /* @__PURE__ */ new Map();
@@ -23642,7 +23788,12 @@ function reportMissingCallInputs(ctx, call) {
         ...chainRelated(chainTo(ctx.index, call.caller.path)),
         ...declaredAt(call.callee, input2.loc, `${quote(input2.name)} is declared required here`)
       ],
-      fix: `Add \`${input2.name}: <value>\` under \`with:\` of jobs.${call.job.id}.`
+      fix: `Add \`${input2.name}: <value>\` under \`with:\` of jobs.${call.job.id}.`,
+      suggestions: [
+        suggestion(`Add input ${quote(input2.name)} under with:`, [
+          addKeys(ctx.index, call.caller.source.path, ["jobs", call.job.id, "with"], [input2.name], ["uses"])
+        ])
+      ]
     });
   }
 }
@@ -23654,7 +23805,18 @@ function reportMissingActionInputs(ctx, use) {
       loc: use.step.uses?.loc ?? use.step.loc,
       symbol: sym.input(use.action.path, input2.name),
       related: declaredAt(use.action, input2.loc, `${quote(input2.name)} is declared required here`),
-      fix: `Add \`${input2.name}: <value>\` under the step's \`with:\`.`
+      fix: `Add \`${input2.name}: <value>\` under the step's \`with:\`.`,
+      suggestions: [
+        suggestion(`Add input ${quote(input2.name)} under with:`, [
+          addKeys(
+            ctx.index,
+            use.unit.source.path,
+            stepWithPath(use.job?.id, use.step.index),
+            [input2.name],
+            ["uses"]
+          )
+        ])
+      ]
     });
   }
 }
@@ -23686,7 +23848,8 @@ var unknownInput = defineRule({
           loc: b.loc,
           symbol: sym.input(target, b.name),
           related: declLoc ? declaredAt(callee, declLoc, `declared inputs: ${listNames(names)}`) : [],
-          fix: unknownInputFix(b.name, guess, callee)
+          fix: unknownInputFix(b.name, guess, callee),
+          suggestions: [guess ? renameAt(ctx.index, b.loc, b.name, guess) : void 0]
         });
       }
     };
@@ -23792,8 +23955,25 @@ function reportUnusedInput(ctx, unit, input2, symbol) {
     message: `Input ${quote(input2.name)} of ${unit.path} is never read${n ? ` (yet ${n} caller${n > 1 ? "s pass" : " passes"} it)` : ""}`,
     loc: input2.loc,
     symbol,
-    related: passed.slice(0, 5).map((b) => ({ loc: b.loc, message: "passed here" }))
+    related: passed.slice(0, 5).map((b) => ({ loc: b.loc, message: "passed here" })),
+    suggestions: [removeInputSuggestion(ctx, unit, input2)]
   });
+}
+function removeInputSuggestion(ctx, unit, input2) {
+  if (isPublished(unit, ctx.config.impact)) return void 0;
+  const declared = unit.kind === "action" ? ["inputs"] : ["on", "workflow_call", "inputs"];
+  const callers = callerBindingRemovals(ctx, unit, input2.name);
+  const n = callers.length;
+  const title = n ? `Remove input ${quote(input2.name)}, and what ${n} caller${n > 1 ? "s pass" : " passes"} for it` : `Remove the unused input ${quote(input2.name)}`;
+  return suggestion(title, [
+    removeKey(ctx.index, unit.source.path, declared, input2.name, input2.loc.line),
+    ...callers
+  ]);
+}
+function callerBindingRemovals(ctx, unit, name) {
+  if (unit.kind === "workflow")
+    return ctx.index.callersOf(unit.path).filter((c) => lookup(c.job.with, name)).map((c) => removeKey(ctx.index, c.caller.source.path, ["jobs", c.job.id, "with"], name));
+  return ctx.index.usersOf(unit.path).filter((u) => lookup(u.step.with, name)).map((u) => removeKey(ctx.index, u.unit.source.path, stepWithPath(u.job?.id, u.step.index), name));
 }
 function callersOf(index, unit) {
   if (unit.kind === "workflow")
@@ -24031,7 +24211,9 @@ function checkInputRead(ctx, unit, inputs, names, ref) {
     message: `${unit.path} has no input ${quote(name)}${didYouMeanNote(guess)}`,
     loc: ref.loc,
     symbol: sym.input(unit.path, name),
-    ...guess ? { fix: `Use \`inputs.${guess}\`.` } : {}
+    ...guess ? { fix: `Use \`inputs.${guess}\`.` } : {},
+    // `inputs.<name>`, or `github.event.inputs.<name>`: the name is the reference's last segment.
+    suggestions: [guess ? renameSegment(ctx.index, ref.loc, ref.path.length, name, guess) : void 0]
   });
 }
 function inputReadName(unit, ref) {
@@ -24137,6 +24319,22 @@ function firstMatrixRefLoc(site, keys, skip = /* @__PURE__ */ new Set()) {
       if (r.context === "matrix" && lower.includes((r.path[0] ?? "").toLowerCase())) return r.loc;
   }
   return site.loc;
+}
+function includeKeysSuggestion(ctx, wf, job, combos, keys) {
+  const m = job.matrix;
+  if (!m || combos.some((c) => c.origin !== "include")) return void 0;
+  const entries2 = [...new Set(combos.flatMap((c) => c.includes))].flatMap((idx) => {
+    const lacks = keys.filter((k) => !lookup(m.include[idx]?.values ?? {}, k));
+    return lacks.length ? [{ idx, lacks }] : [];
+  });
+  const edits = entries2.map(
+    ({ idx, lacks }) => addKeys(ctx.index, wf.source.path, ["jobs", job.id, "strategy", "matrix", "include", idx], lacks)
+  );
+  const what = keys.map((k) => `"${k}"`).join(", ");
+  return suggestion(
+    `Add ${what} to the include ${entries2.length > 1 ? "entries" : "entry"} without it`,
+    edits
+  );
 }
 function comboRelated(job, combos, keys) {
   const out = [];
@@ -24286,7 +24484,8 @@ function checkWithTarget(ctx, { wf, job, exp }, t) {
       ...impact.related
     ],
     fix: `Set ${keys.map((k) => `\`${k}\``).join(", ")} in every combination, or use a fallback: \`\${{ ${keyList.split(", ")[0]} || '<default>' }}\`.`,
-    severity: impact.severity
+    severity: impact.severity,
+    suggestions: [includeKeysSuggestion(ctx, wf, job, combos, keys)]
   });
 }
 function missingKeys(keys, perKey) {
@@ -24352,7 +24551,8 @@ function checkMatrixKeys(ctx, { wf, job, exp }, site) {
       loc: firstMatrixRefLoc(site, [key], unhandled.tested),
       combos: combos.map((c) => comboLabel(c, exp.keys)),
       symbol: sym.matrix(wf.path, job.id, key),
-      related: comboRelated(job, combos, [key])
+      related: comboRelated(job, combos, [key]),
+      suggestions: [includeKeysSuggestion(ctx, wf, job, combos, [key])]
     });
   }
 }
@@ -24659,7 +24859,9 @@ function checkJobOutputRef(ctx, wf, site, ref, a) {
     message: `jobs.${job.id} has no output ${quote(c)}${didYouMeanNote(guess)}`,
     loc: ref.loc,
     symbol: sym.jobOutput(wf.path, job.id, c),
-    related: [jobOutputsDeclared(ctx, job, names)]
+    related: [jobOutputsDeclared(ctx, job, names)],
+    // `needs.<job>.outputs.<name>` or `jobs.<job>.outputs.<name>`
+    suggestions: [guess ? renameSegment(ctx.index, ref.loc, 3, c, guess) : void 0]
   });
 }
 function checkStepOutputRef(ctx, unit, site, ref, a) {
@@ -24674,7 +24876,8 @@ function checkStepOutputRef(ctx, unit, site, ref, a) {
     ctx.report({
       message: `No step with id ${quote(a)} in ${site.job ? `jobs.${site.job}` : unit.path}${didYouMeanNote(guess)}`,
       loc: ref.loc,
-      symbol: stepOutputSymbol(unit, site, a, c)
+      symbol: stepOutputSymbol(unit, site, a, c),
+      suggestions: [guess ? renameSegment(ctx.index, ref.loc, 1, a, guess) : void 0]
     });
     return;
   }
@@ -24701,6 +24904,7 @@ function checkActionOutputRef(ctx, step2, ref) {
     message: `${action.path} has no output ${quote(c)}${didYouMeanNote(guess)}`,
     loc: ref.loc,
     symbol: sym.output(action.path, c),
+    suggestions: [guess ? renameSegment(ctx.index, ref.loc, 3, c, guess) : void 0],
     related: [{ loc: step2.uses?.loc ?? step2.loc, message: `declared outputs: ${listNames(names)}` }]
   });
 }
@@ -24896,6 +25100,7 @@ function checkStepOutputWritten(ctx, unit, site, ref) {
     message: `Step ${quote(a)} never writes output ${quote(c)} (it writes ${listNames(w.names)})${didYouMeanNote(guess)}`,
     loc: ref.loc,
     symbol: stepOutputSymbol(unit, site, a, c),
+    suggestions: [guess ? renameSegment(ctx.index, ref.loc, 3, c, guess) : void 0],
     related: [{ loc: step2.runLoc ?? step2.loc, message: "outputs are written here" }]
   });
 }
@@ -25120,6 +25325,17 @@ function reportMissingSecret(ctx, call, s) {
     related: [
       ...chainRelated(chainTo(ctx.index, call.caller.path)),
       ...isExternal(call.callee) ? [] : [{ loc: s.loc, message: "declared required here" }]
+    ],
+    suggestions: [
+      suggestion(`Add secret ${quote(s.name)} under secrets:`, [
+        addKeys(
+          ctx.index,
+          call.caller.source.path,
+          ["jobs", call.job.id, "secrets"],
+          [s.name],
+          ["with", "uses"]
+        )
+      ])
     ]
   });
 }
@@ -25158,6 +25374,7 @@ function reportUnknownSecret(ctx, call, b, declared) {
     message: `${call.callee.path} has no secret ${quote(b.name)}${guess ? ` \u2014 did you mean ${quote(guess)}?` : ""}`,
     loc: b.loc,
     symbol: sym.secret(call.callee.path, b.name),
+    suggestions: [guess ? renameAt(ctx.index, b.loc, b.name, guess) : void 0],
     // The rule's own fix says to declare the secret in the callee, which the caller of a remote one cannot do.
     ...remote && !guess ? { fix: `Remove ${quote(b.name)} from \`secrets:\`: ${call.callee.path} does not declare it.` } : {},
     related: where ? [{ loc: where, message: `declared secrets: ${listNames(declared)}` }] : []
@@ -26629,8 +26846,13 @@ function toFinding(rule, severity, input2, registry2) {
     // Per-finding fixes embed names from the YAML, so newlines are escaped unless the rule vouches for the text.
     fix: input2.fix !== void 0 ? escapeControl(input2.fix, input2.fixMultiline === true) : escapeControl(rule.docs.fix, true),
     docsUrl: registry2.docsUrl(rule),
-    fingerprint: fingerprint(rule.code, input2.symbol, input2.loc.file, input2.message)
+    fingerprint: fingerprint(rule.code, input2.symbol, input2.loc.file, input2.message),
+    ...suggestionsOf(input2)
   };
+}
+function suggestionsOf(input2) {
+  const suggestions = (input2.suggestions ?? []).filter((x) => x !== void 0);
+  return suggestions.length ? { suggestions } : {};
 }
 function dedupe2(findings) {
   const seen = /* @__PURE__ */ new Set();
@@ -27852,7 +28074,15 @@ var findingSchema = object({
   why: string2(),
   fix: string2(),
   docsUrl: url(),
-  fingerprint: string2().check(_regex(/^[0-9a-f]{16}$/))
+  fingerprint: string2().check(_regex(/^[0-9a-f]{16}$/)),
+  suggestions: optional(
+    array(
+      object({
+        title: string2(),
+        edits: array(object({ loc: locSchema, newText: string2() }))
+      })
+    )
+  )
 });
 var reportSchema = object({
   $schema: string2(),
@@ -28299,6 +28529,15 @@ var sarifLocation = (loc, pathPrefix) => ({
   artifactLocation: { uri: inRepository(loc.file, pathPrefix), uriBaseId: "%SRCROOT%" },
   region: region(loc)
 });
+function sarifFixes(suggestions, pathPrefix) {
+  return suggestions.map((s) => ({
+    description: { text: s.title },
+    artifactChanges: [...new Set(s.edits.map((e) => e.loc.file))].map((file) => ({
+      artifactLocation: { uri: inRepository(file, pathPrefix), uriBaseId: "%SRCROOT%" },
+      replacements: s.edits.filter((e) => e.loc.file === file).map((e) => ({ deletedRegion: region(e.loc), insertedContent: { text: e.newText } }))
+    }))
+  }));
+}
 function sarifLog(driver, results) {
   const sarif = {
     $schema: SARIF_SCHEMA,
@@ -28686,6 +28925,7 @@ function renderSarif(result, opts = {}) {
       }))
     } : {},
     partialFingerprints: { "flowpact/v1": f.fingerprint },
+    ...f.suggestions?.length ? { fixes: sarifFixes(f.suggestions, opts.pathPrefix) } : {},
     ..."override" in f ? { suppressions: [{ kind: "external", status: "accepted", justification: f.override.reason }] } : {},
     properties: {
       ...f.combos?.length ? { combos: f.combos } : {},
@@ -28758,7 +28998,7 @@ function renderVersionChanges(v, links = {}) {
 }
 
 // src/main.ts
-var import_yaml10 = __toESM(require_dist(), 1);
+var import_yaml11 = __toESM(require_dist(), 1);
 
 // src/upload.ts
 import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
@@ -29113,7 +29353,7 @@ var fromActionDir = (p) => isAbsolute8(p) ? p : resolve8(ACTION_DIR, p);
 function declaredDefaultsOf(actionYml) {
   const defaults = {};
   try {
-    const meta2 = (0, import_yaml10.parse)(readFileSync5(actionYml, "utf8"));
+    const meta2 = (0, import_yaml11.parse)(readFileSync5(actionYml, "utf8"));
     for (const [k, v] of Object.entries(meta2?.inputs ?? {}))
       if (typeof v?.default === "string") defaults[k] = v.default;
   } catch (err) {
