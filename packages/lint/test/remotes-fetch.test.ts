@@ -8,9 +8,11 @@ import {
   commitOf,
   downloadRemoteSources,
   type FetchedSource,
+  fetchRemoteEntries,
   hostOf,
   parseRemoteRef,
   type RemotesLock,
+  remoteRefsOf,
   serializeRemotesLock,
   updateRemotesLock,
 } from '@flowpact/lint';
@@ -112,7 +114,11 @@ describe('updateRemotesLock', () => {
     expect(u.added).toEqual(['octo/setup@v2', 'octo/ship/.github/workflows/deploy.yml@v1']);
     expect(u.failed).toEqual([]);
     expect(u.unreadable).toEqual([
-      { ref: 'octo/gone@v1', error: 'octo/gone@v1 not found, or not readable with this token' },
+      {
+        ref: 'octo/gone@v1',
+        error: 'octo/gone@v1 not found, or not readable with this token',
+        kind: 'not-found',
+      },
     ]);
     // Without an entry, it is recorded, so FP612 counts it as accounted for.
     expect(u.lock.unreadable).toEqual({
@@ -187,7 +193,7 @@ describe('fetchRemoteEntry limits', () => {
       [`${WF}/ci.yml`]: 'on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: octo/big@v1\n',
     }).index;
     const u = await updateRemotesLock(index, undefined, { fetch: big });
-    expect(u.failed).toEqual([{ ref: 'octo/big@v1', error: 'a response over 1000000 bytes' }]);
+    expect(u.failed).toEqual([{ ref: 'octo/big@v1', error: 'a response over 1000000 bytes', kind: 'other' }]);
   });
 });
 
@@ -203,9 +209,15 @@ describe('unreadable references', () => {
     }).index;
     const u = await updateRemotesLock(index, undefined, { fetch: api });
     expect(u.unreadable).toEqual([
-      { ref: 'octo/odd@0123', error: 'octo/odd@0123 not found, or not readable with this token' },
+      {
+        ref: 'octo/odd@0123',
+        error: 'octo/odd@0123 not found, or not readable with this token',
+        kind: 'not-found',
+      },
     ]);
-    expect(u.failed).toEqual([{ ref: 'octo/down@v1', error: '502 Bad Gateway from the GitHub API' }]);
+    expect(u.failed).toEqual([
+      { ref: 'octo/down@v1', error: '502 Bad Gateway from the GitHub API', kind: 'server' },
+    ]);
     expect(Object.keys(u.lock.unreadable ?? {})).toEqual(['octo/odd@0123']);
   });
 
@@ -299,7 +311,7 @@ describe('failures that pass', () => {
     }
     const down = first([status(503), status(503), status(503)]);
     const u = await update(down.fetch);
-    expect(u.failed).toEqual([{ ref: 'octo/setup@v2', error: '503 from the GitHub API' }]);
+    expect(u.failed).toEqual([{ ref: 'octo/setup@v2', error: '503 from the GitHub API', kind: 'server' }]);
     expect(down.sent()).toBe(3);
   });
 
@@ -309,7 +321,11 @@ describe('failures that pass', () => {
     expect(soon.sent()).toBe(4);
     const later = first([status(429, { 'retry-after': '3600' })]);
     expect((await update(later.fetch)).failed).toEqual([
-      { ref: 'octo/setup@v2', error: 'the GitHub API asks to slow down (429): try again in 3600 s' },
+      {
+        ref: 'octo/setup@v2',
+        error: 'the GitHub API asks to slow down (429): try again in 3600 s',
+        kind: 'rate-limit',
+      },
     ]);
     expect(later.sent()).toBe(1);
   });
@@ -317,7 +333,7 @@ describe('failures that pass', () => {
   it('does not send again what another try cannot change', async () => {
     const usedUp = status(403, { 'x-ratelimit-remaining': '0' });
     for (const [answer, error] of [
-      [status(401), /rejected the token/],
+      [status(401), /asks for a token/],
       [status(403), /needs read access/],
       [usedUp, /rate limit is used up/],
       [status(429, { 'x-ratelimit-remaining': '0' }), /rate limit is used up/],
@@ -378,6 +394,75 @@ describe('updateRemotesLock with paths', () => {
   });
 });
 
+describe('a host that cannot be reached', () => {
+  /** A workflow that uses twelve actions, one more than eight at a time can fetch together. */
+  const index = () =>
+    lint({
+      [`${WF}/ci.yml`]: `on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n${Array.from(
+        { length: 12 },
+        (_, i) => `      - uses: octo/a${i}@v1\n`,
+      ).join('')}`,
+    }).index;
+  /** A fetch that always fails as `fail` says, counting the requests to each host. */
+  function always(fail: () => Response | Error) {
+    const sent = new Map<string, number>();
+    const fetch = (async (input: string | URL) => {
+      const { host } = new URL(input);
+      sent.set(host, (sent.get(host) ?? 0) + 1);
+      const answer = fail();
+      if (answer instanceof Error) throw answer;
+      return answer;
+    }) as typeof globalThis.fetch;
+    return { fetch, sent: (host = 'api.github.com') => sent.get(host) ?? 0 };
+  }
+  const refused = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+
+  it('fails the references after the first that could not reach it at once, without sending them', async () => {
+    const api = always(refused);
+    const u = await updateRemotesLock(index(), undefined, { fetch: api.fetch, retryDelayMs: 0 });
+    expect(u.failed).toHaveLength(12);
+    expect(new Set(u.failed.map((f) => `${f.kind}: ${f.error}`))).toEqual(
+      new Set([
+        'unreachable: could not reach https://api.github.com (ECONNREFUSED): check the network and GITHUB_API_URL; behind a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1',
+      ]),
+    );
+    // At most the first eight, three times each; twelve would be sent 36 times.
+    expect(api.sent()).toBeLessThanOrEqual(24);
+    // A timeout counts as well.
+    const slow = always(() => Object.assign(new Error('timed out'), { name: 'TimeoutError' }));
+    await updateRemotesLock(index(), undefined, { fetch: slow.fetch, retryDelayMs: 0 });
+    expect(slow.sent()).toBeLessThanOrEqual(24);
+  });
+
+  it('still sends each request to a host that answers, with errors', async () => {
+    const api = always(() => new Response('', { status: 503 }));
+    const u = await updateRemotesLock(index(), undefined, { fetch: api.fetch, retryDelayMs: 0 });
+    expect(u.failed.map((f) => f.kind)).toEqual(Array(12).fill('server'));
+    expect(api.sent()).toBe(36);
+  });
+
+  it('is remembered across the fetching functions given the same map, host by host', async () => {
+    const unreachableHosts = new Map<string, Error>();
+    const first = always(refused);
+    await updateRemotesLock(index(), undefined, { fetch: first.fetch, retryDelayMs: 0, unreachableHosts });
+    expect([...unreachableHosts.keys()]).toEqual(['api.github.com']);
+    const again = always(refused);
+    const refs = remoteRefsOf(index());
+    const r = await fetchRemoteEntries(refs, { fetch: again.fetch, retryDelayMs: 0, unreachableHosts });
+    expect(r.failed.map((f) => f.kind)).toEqual(Array(12).fill('unreachable'));
+    expect(again.sent()).toBe(0);
+    // Another host is asked as usual.
+    const elsewhere = always(refused);
+    await fetchRemoteEntries(refs.slice(0, 1), {
+      fetch: elsewhere.fetch,
+      retryDelayMs: 0,
+      apiUrl: 'https://gh.corp.example/api/v3',
+      unreachableHosts,
+    });
+    expect(elsewhere.sent('gh.corp.example')).toBe(3);
+  });
+});
+
 describe('fetch errors say why and what to do, and progress is reported', () => {
   const index = () =>
     lint({
@@ -408,6 +493,10 @@ describe('fetch errors say why and what to do, and progress is reported', () => 
     expect(await error(() => new Response('', { status: 401 }), 't')).toBe(
       'the GitHub API rejected the token (401): check GH_TOKEN or GITHUB_TOKEN, or run `gh auth status`',
     );
+    // Without a token, none was rejected: the API wants one.
+    expect(await error(() => new Response('', { status: 401 }))).toBe(
+      'the GitHub API asks for a token (401): set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`',
+    );
     const limited = () => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0' } });
     expect(await error(limited)).toBe(
       'the GitHub API rate limit is used up (403): without a token it allows 60 requests an hour; set GH_TOKEN or GITHUB_TOKEN, or sign in with `gh auth login`',
@@ -415,6 +504,59 @@ describe('fetch errors say why and what to do, and progress is reported', () => 
     expect(await error(() => new Response('', { status: 403 }), 't')).toBe(
       "the GitHub API refused the request (403): the token needs read access to the repository's contents",
     );
+  });
+
+  it('tells the kind of each failure, for what to check', async () => {
+    const kinds = async (fail: () => Response | never, token?: string) =>
+      (
+        await updateRemotesLock(index(), undefined, {
+          fetch: failing(fail),
+          retryDelayMs: 0,
+          ...(token ? { token } : {}),
+        })
+      ).failed[0]?.kind;
+    const offline = () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    };
+    const slow = () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    };
+    expect(await kinds(offline)).toBe('unreachable');
+    expect(await kinds(slow)).toBe('timeout');
+    expect(await kinds(() => new Response('', { status: 401 }), 't')).toBe('token');
+    expect(await kinds(() => new Response('', { status: 403 }), 't')).toBe('access');
+    expect(
+      await kinds(() => new Response('', { status: 429, headers: { 'x-ratelimit-remaining': '0' } })),
+    ).toBe('rate-limit');
+    expect(await kinds(() => new Response('', { status: 500 }))).toBe('server');
+    expect(await kinds(() => new Response('', { status: 418 }))).toBe('other');
+  });
+
+  it('says how many references there are before the first request, and why it sends one again', async () => {
+    const events: string[] = [];
+    const answers: (Response | Error)[] = [
+      Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } }),
+      new Response('', { status: 503, statusText: 'Service Unavailable' }),
+    ];
+    const api = fakeApi({ 'octo/setup@v2': SHA('b') }, { [`octo/setup/action.yml@${SHA('b')}`]: SETUP });
+    const fetch = (async (input: string | URL, init?: RequestInit) => {
+      const answer = answers.shift();
+      if (answer instanceof Error) throw answer;
+      return answer ?? api.fetch(input, init);
+    }) as typeof globalThis.fetch;
+    await updateRemotesLock(index(), undefined, {
+      fetch,
+      retryDelayMs: 0,
+      onStart: (total) => events.push(`start ${total}`),
+      onRetry: (r) => events.push(`${r.host}: ${r.why}, attempt ${r.attempt} of ${r.attempts}`),
+      onProgress: (p) => events.push(`${p.ref} ${p.outcome}`),
+    });
+    expect(events).toEqual([
+      'start 1',
+      'api.github.com: connection timed out, attempt 2 of 3',
+      'api.github.com: 503 Service Unavailable, attempt 3 of 3',
+      'octo/setup@v2 fetched',
+    ]);
   });
 
   it('reports progress for each reference as it is done', async () => {
@@ -865,6 +1007,7 @@ describe('the files read, for the sources cache', () => {
       {
         ref: 'octo/setup@v2',
         error: `no action.yml in the repository root at ${SHA('c').slice(0, 7)}, or not readable with this token`,
+        kind: 'not-found',
       },
     ]);
   });
